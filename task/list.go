@@ -17,6 +17,10 @@ type List struct {
 	// resources currently used by running tasks
 	usedResources *ResourcesSet
 	idCounter     int
+
+	queue     chan *Task
+	queueWg   *sync.WaitGroup
+	queueDone chan bool
 }
 
 // NewList creates empty task list
@@ -27,8 +31,70 @@ func NewList() *List {
 		wgTasks:       make(map[int]*sync.WaitGroup),
 		wg:            &sync.WaitGroup{},
 		usedResources: NewResourcesSet(),
+		queue:         make(chan *Task, 0),
+		queueWg:       &sync.WaitGroup{},
+		queueDone:     make(chan bool),
 	}
+	go list.consumer()
 	return list
+}
+
+// consumer is processing the queue
+func (list *List) consumer() {
+	for {
+		select {
+		case task := <-list.queue:
+			list.Lock()
+			{
+				task.State = RUNNING
+			}
+			list.Unlock()
+
+			go func() {
+				retValue, err := task.process(aptly.Progress(task.output), task.detail)
+
+				list.Lock()
+				{
+					task.processReturnValue = retValue
+					task.err = err
+					if err != nil {
+						task.output.Printf("Task failed with error: %v", err)
+						task.State = FAILED
+					} else {
+						task.output.Print("Task succeeded")
+						task.State = SUCCEEDED
+					}
+
+					list.usedResources.Free(task.resources)
+
+					task.wgTask.Done()
+					list.wg.Done()
+
+					for _, t := range list.tasks {
+						if t.State == IDLE {
+							// check resources
+							blockingTasks := list.usedResources.UsedBy(t.resources)
+							if len(blockingTasks) == 0 {
+								list.usedResources.MarkInUse(task.resources, task)
+								list.queue <- t
+								break
+							}
+						}
+					}
+				}
+				list.Unlock()
+			}()
+
+		case <-list.queueDone:
+			return
+		}
+	}
+}
+
+// Stop signals the consumer to stop processing tasks and waits for it to finish
+func (list *List) Stop() {
+	close(list.queueDone)
+	list.queueWg.Wait()
 }
 
 // GetTasks gets complete list of tasks
@@ -117,60 +183,29 @@ func (list *List) GetTaskReturnValueByID(ID int) (*ProcessReturnValue, error) {
 	return task.processReturnValue, nil
 }
 
-// RunTaskInBackground creates task and runs it in background. It won't be run and an error
-// returned if there are running tasks which are using needed resources already.
+// RunTaskInBackground creates task and runs it in background. This will block until the necessary resources
+// become available.
 func (list *List) RunTaskInBackground(name string, resources []string, process Process) (Task, *ResourceConflictError) {
 	list.Lock()
 	defer list.Unlock()
 
-	tasks := list.usedResources.UsedBy(resources)
-	if len(tasks) > 0 {
-		conflictError := &ResourceConflictError{
-			Tasks:   tasks,
-			Message: "Needed resources are used by other tasks.",
-		}
-		return Task{}, conflictError
-	}
-
 	list.idCounter++
 	wgTask := &sync.WaitGroup{}
-	task := NewTask(process, name, list.idCounter)
+	task := NewTask(process, name, list.idCounter, resources, wgTask)
 
 	list.tasks = append(list.tasks, task)
 	list.wgTasks[task.ID] = wgTask
-	list.usedResources.MarkInUse(resources, task)
 
 	list.wg.Add(1)
-	wgTask.Add(1)
+	task.wgTask.Add(1)
 
-	go func() {
-
-		list.Lock()
-		{
-			task.State = RUNNING
-		}
-		list.Unlock()
-
-		retValue, err := process(aptly.Progress(task.output), task.detail)
-
-		list.Lock()
-		{
-			task.processReturnValue = retValue
-			if err != nil {
-				task.output.Printf("Task failed with error: %v", err)
-				task.State = FAILED
-			} else {
-				task.output.Print("Task succeeded")
-				task.State = SUCCEEDED
-			}
-
-			list.usedResources.Free(resources)
-
-			wgTask.Done()
-			list.wg.Done()
-		}
-		list.Unlock()
-	}()
+	// add task to queue for processing if resources are available
+	// if not, task will be queued by the consumer once resources are available
+	tasks := list.usedResources.UsedBy(resources)
+	if len(tasks) == 0 {
+		list.usedResources.MarkInUse(task.resources, task)
+		list.queue <- task
+	}
 
 	return *task, nil
 }
@@ -206,4 +241,15 @@ func (list *List) WaitForTaskByID(ID int) (Task, error) {
 
 	wgTask.Wait()
 	return list.GetTaskByID(ID)
+}
+
+// GetTaskError returns the Task error for a given id
+func (list *List) GetTaskErrorByID(ID int) (error, error) {
+	task, err := list.GetTaskByID(ID)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return task.err, nil
 }

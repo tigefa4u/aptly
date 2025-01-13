@@ -6,7 +6,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"math/rand"
 	"os"
 	"strings"
 	"testing"
@@ -52,8 +51,7 @@ func TestRunMain(t *testing.T) {
 	}
 
 	aptly.Version = Version
-
-	rand.Seed(time.Now().UnixNano())
+	aptly.AptlyConf = AptlyConf
 
 	args := filterOutTestArgs(os.Args[1:])
 	root := cmd.RootCommand()

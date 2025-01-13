@@ -20,7 +20,7 @@ import (
 	"github.com/aptly-dev/aptly/http"
 	"github.com/aptly-dev/aptly/pgp"
 	"github.com/aptly-dev/aptly/utils"
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/ugorji/go/codec"
 )
 
@@ -84,7 +84,7 @@ type RemoteRepo struct {
 func NewRemoteRepo(name string, archiveRoot string, distribution string, components []string,
 	architectures []string, downloadSources bool, downloadUdebs bool, downloadInstaller bool) (*RemoteRepo, error) {
 	result := &RemoteRepo{
-		UUID:              uuid.New(),
+		UUID:              uuid.NewString(),
 		Name:              name,
 		ArchiveRoot:       archiveRoot,
 		Distribution:      distribution,
@@ -105,7 +105,6 @@ func NewRemoteRepo(name string, archiveRoot string, distribution string, compone
 		if !strings.HasPrefix(result.Distribution, ".") {
 			result.Distribution = "./" + result.Distribution
 		}
-		result.Architectures = nil
 		if len(result.Components) > 0 {
 			return nil, fmt.Errorf("components aren't supported for flat repos")
 		}
@@ -259,6 +258,9 @@ func (repo *RemoteRepo) UdebPath(component string, architecture string) string {
 // InstallerPath returns path of Packages files for given component and
 // architecture
 func (repo *RemoteRepo) InstallerPath(component string, architecture string) string {
+	if repo.Distribution == aptly.DistributionFocal {
+		return fmt.Sprintf("%s/installer-%s/current/legacy-images/SHA256SUMS", component, architecture)
+	}
 	return fmt.Sprintf("%s/installer-%s/current/images/SHA256SUMS", component, architecture)
 }
 
@@ -270,17 +272,29 @@ func (repo *RemoteRepo) PackageURL(filename string) *url.URL {
 }
 
 // Fetch updates information about repository
-func (repo *RemoteRepo) Fetch(d aptly.Downloader, verifier pgp.Verifier) error {
+func (repo *RemoteRepo) Fetch(d aptly.Downloader, verifier pgp.Verifier, ignoreSignatures bool) error {
 	var (
 		release, inrelease, releasesig *os.File
 		err                            error
 	)
 
-	if verifier == nil {
+	if ignoreSignatures {
 		// 0. Just download release file to temporary URL
 		release, err = http.DownloadTemp(gocontext.TODO(), d, repo.ReleaseURL("Release").String())
 		if err != nil {
-			return err
+			// 0.1 try downloading InRelease, ignore and strip signature
+			inrelease, err = http.DownloadTemp(gocontext.TODO(), d, repo.ReleaseURL("InRelease").String())
+			if err != nil {
+				return err
+			}
+			if verifier == nil {
+				return fmt.Errorf("no verifier specified")
+			}
+			release, err = verifier.ExtractClearsigned(inrelease)
+			if err != nil {
+				return err
+			}
+			goto ok
 		}
 	} else {
 		// 1. try InRelease file
@@ -336,7 +350,7 @@ ok:
 		return err
 	}
 
-	if !repo.IsFlat() {
+	if len(stanza["Architectures"]) > 0 {
 		architectures := strings.Split(stanza["Architectures"], " ")
 		sort.Strings(architectures)
 		// "source" architecture is never present, despite Release file claims
@@ -350,7 +364,13 @@ ok:
 				return err
 			}
 		}
+	}
 
+	if len(repo.Architectures) == 0 {
+		return fmt.Errorf("no architectures found, please specify")
+	}
+
+	if !repo.IsFlat() {
 		components := strings.Split(stanza["Components"], " ")
 		if strings.Contains(repo.Distribution, "/") {
 			distributionLast := path.Base(repo.Distribution) + "/"
@@ -428,8 +448,7 @@ ok:
 }
 
 // DownloadPackageIndexes downloads & parses package index files
-func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.Downloader, verifier pgp.Verifier, collectionFactory *CollectionFactory,
-	ignoreMismatch bool) error {
+func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.Downloader, verifier pgp.Verifier, _ *CollectionFactory, ignoreSignatures bool, ignoreChecksums bool) error {
 	if repo.packageList != nil {
 		panic("packageList != nil")
 	}
@@ -462,14 +481,14 @@ func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.
 
 	for _, info := range packagesPaths {
 		path, kind, component, architecture := info[0], info[1], info[2], info[3]
-		packagesReader, packagesFile, err := http.DownloadTryCompression(gocontext.TODO(), d, repo.IndexesRootURL(), path, repo.ReleaseFiles, ignoreMismatch)
+		packagesReader, packagesFile, err := http.DownloadTryCompression(gocontext.TODO(), d, repo.IndexesRootURL(), path, repo.ReleaseFiles, ignoreChecksums)
 
 		isInstaller := kind == PackageTypeInstaller
 		if err != nil {
 			if _, ok := err.(*http.NoCandidateFoundError); isInstaller && ok {
 				// checking if gpg file is only needed when checksums matches are required.
 				// otherwise there actually has been no candidate found and we can continue
-				if ignoreMismatch {
+				if ignoreChecksums {
 					continue
 				}
 
@@ -486,7 +505,7 @@ func (repo *RemoteRepo) DownloadPackageIndexes(progress aptly.Progress, d aptly.
 					return err
 				}
 
-				if verifier != nil {
+				if verifier != nil && !ignoreSignatures {
 					hashsumGpgPath := repo.IndexesRootURL().ResolveReference(&url.URL{Path: path + ".gpg"}).String()
 					var filesig *os.File
 					filesig, err = http.DownloadTemp(gocontext.TODO(), d, hashsumGpgPath)
@@ -577,7 +596,15 @@ func (repo *RemoteRepo) ApplyFilter(dependencyOptions int, filterQuery PackageQu
 	emptyList.PrepareIndex()
 
 	oldLen = repo.packageList.Len()
-	repo.packageList, err = repo.packageList.FilterWithProgress([]PackageQuery{filterQuery}, repo.FilterWithDeps, emptyList, dependencyOptions, repo.Architectures, progress)
+	repo.packageList, err = repo.packageList.Filter(FilterOptions{
+		Queries:           []PackageQuery{filterQuery},
+		WithDependencies:  repo.FilterWithDeps,
+		Source:            emptyList,
+		WithSources:       repo.DownloadSources,
+		DependencyOptions: dependencyOptions,
+		Architectures:     repo.Architectures,
+		Progress:          progress,
+	})
 	if repo.packageList != nil {
 		newLen = repo.packageList.Len()
 	}
@@ -777,7 +804,7 @@ func (collection *RemoteRepoCollection) search(filter func(*RemoteRepo) bool, un
 		return result
 	}
 
-	collection.db.ProcessByPrefix([]byte("R"), func(key, blob []byte) error {
+	collection.db.ProcessByPrefix([]byte("R"), func(_, blob []byte) error {
 		r := &RemoteRepo{}
 		if err := r.Decode(blob); err != nil {
 			log.Printf("Error decoding remote repo: %s\n", err)
@@ -880,7 +907,7 @@ func (collection *RemoteRepoCollection) ByUUID(uuid string) (*RemoteRepo, error)
 
 // ForEach runs method for each repository
 func (collection *RemoteRepoCollection) ForEach(handler func(*RemoteRepo) error) error {
-	return collection.db.ProcessByPrefix([]byte("R"), func(key, blob []byte) error {
+	return collection.db.ProcessByPrefix([]byte("R"), func(_, blob []byte) error {
 		r := &RemoteRepo{}
 		if err := r.Decode(blob); err != nil {
 			log.Printf("Error decoding mirror: %s\n", err)

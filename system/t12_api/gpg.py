@@ -2,32 +2,47 @@ import inspect
 import os
 import subprocess
 import tempfile
+import json
 
 from api_lib import APITest
 
 
 def check_gpgkey_exists(gpg_key, keyring):
-    subprocess.check_call([
+    p = subprocess.Popen([
         "gpg", "--no-default-keyring",
         "--keyring", keyring,
-        "--fingerprint", gpg_key,
-    ])
+        "--fingerprint", gpg_key],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    p.communicate()
+    if p.returncode != 0:
+        raise Exception("gpg key does not exists")
 
 
 class GPGAPITestAddKey(APITest):
     """
     POST /gpg/key
     """
+    requiresGPG2 = True
+
+    fixtureCmds = [
+        "gpgconf --kill dirmngr",
+        "gpgconf --launch dirmngr",
+        "sleep 2"
+    ]
 
     def check(self):
         with tempfile.NamedTemporaryFile(suffix=".pub") as keyring:
             gpgkeyid = "9E3E53F19C7DE460"
             resp = self.post("/api/gpg/key", json={
-                "Keyserver": "keyserver.ubuntu.com",
+                "Keyserver": "hkp://keyserver.ubuntu.com:80",
                 "Keyring": keyring.name,
                 "GpgKeyID": gpgkeyid
             })
-
+            if resp.status_code != 200:
+                output = json.loads(resp.text)
+                print(f"{output}\n")
             self.check_equal(resp.status_code, 200)
             check_gpgkey_exists(gpgkeyid, keyring.name)
 

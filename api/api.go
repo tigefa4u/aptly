@@ -23,12 +23,43 @@ import (
 //  3. SnapshotCollection
 //  4. PublishedRepoCollection
 
-// GET /api/version
+type aptlyVersion struct {
+	// Aptly Version
+	Version string `json:"Version"`
+}
+
+// @Summary Aptly Version
+// @Description **Get aptly version**
+// @Description
+// @Description **Example:**
+// @Description ```
+// @Description $ curl http://localhost:8080/api/version
+// @Description {"Version":"0.9~dev"}
+// @Description ```
+// @Tags Status
+// @Produce json
+// @Success 200 {object} aptlyVersion
+// @Router /api/version [get]
 func apiVersion(c *gin.Context) {
 	c.JSON(200, gin.H{"Version": aptly.Version})
 }
 
-// GET /api/ready
+type aptlyStatus struct {
+	// Aptly Status
+	Status string `json:"Status" example:"'Aptly is ready', 'Aptly is unavailable', 'Aptly is healthy'"`
+}
+
+// @Summary Get Ready State
+// @Description **Get aptly ready state**
+// @Description
+// @Description Return aptly ready state:
+// @Description - `Aptly is ready` (HTTP 200)
+// @Description - `Aptly is unavailable` (HTTP 503)
+// @Tags Status
+// @Produce json
+// @Success 200 {object} aptlyStatus "Aptly is ready"
+// @Failure 503 {object} aptlyStatus "Aptly is unavailable"
+// @Router /api/ready [get]
 func apiReady(isReady *atomic.Value) func(*gin.Context) {
 	return func(c *gin.Context) {
 		if isReady == nil || !isReady.Load().(bool) {
@@ -40,7 +71,15 @@ func apiReady(isReady *atomic.Value) func(*gin.Context) {
 	}
 }
 
-// GET /api/healthy
+// @Summary Get Health State
+// @Description **Get aptly health state**
+// @Description
+// @Description Return aptly health state:
+// @Description - `Aptly is healthy` (HTTP 200)
+// @Tags Status
+// @Produce json
+// @Success 200 {object} aptlyStatus
+// @Router /api/healthy [get]
 func apiHealthy(c *gin.Context) {
 	c.JSON(200, gin.H{"Status": "Aptly is healthy"})
 }
@@ -155,7 +194,7 @@ func maybeRunTaskInBackground(c *gin.Context, name string, resources []string, p
 	// Run this task in background if configured globally or per-request
 	background := truthy(c.DefaultQuery("_async", strconv.FormatBool(context.Config().AsyncAPI)))
 	if background {
-		log.Info().Msg("Executing task asynchronously")
+		log.Debug().Msg("Executing task asynchronously")
 		task, conflictErr := runTaskInBackground(name, resources, proc)
 		if conflictErr != nil {
 			AbortWithJSONError(c, 409, conflictErr)
@@ -163,10 +202,19 @@ func maybeRunTaskInBackground(c *gin.Context, name string, resources []string, p
 		}
 		c.JSON(202, task)
 	} else {
-		log.Info().Msg("Executing task synchronously")
-		out := context.Progress()
-		detail := task.Detail{}
-		retValue, err := proc(out, &detail)
+		log.Debug().Msg("Executing task synchronously")
+		task, conflictErr := runTaskInBackground(name, resources, proc)
+		if conflictErr != nil {
+			AbortWithJSONError(c, 409, conflictErr)
+			return
+		}
+
+		// wait for task to finish
+		context.TaskList().WaitForTaskByID(task.ID)
+
+		retValue, _ := context.TaskList().GetTaskReturnValueByID(task.ID)
+		err, _ := context.TaskList().GetTaskErrorByID(task.ID)
+		context.TaskList().DeleteTaskByID(task.ID)
 		if err != nil {
 			AbortWithJSONError(c, retValue.Code, err)
 			return
@@ -218,12 +266,48 @@ func showPackages(c *gin.Context, reflist *deb.PackageRefList, collectionFactory
 
 		list.PrepareIndex()
 
-		list, err = list.Filter([]deb.PackageQuery{q}, withDeps,
-			nil, context.DependencyOptions(), architecturesList)
+		list, err = list.Filter(deb.FilterOptions{
+			Queries:           []deb.PackageQuery{q},
+			WithDependencies:  withDeps,
+			Source:            nil,
+			DependencyOptions: context.DependencyOptions(),
+			Architectures:     architecturesList,
+		})
 		if err != nil {
 			AbortWithJSONError(c, 500, fmt.Errorf("unable to search: %s", err))
 			return
 		}
+	}
+
+	// filter packages by version
+	if c.Request.URL.Query().Get("maximumVersion") == "1" {
+		list.PrepareIndex()
+		list.ForEach(func(p *deb.Package) error {
+			versionQ, err := query.Parse(fmt.Sprintf("Name (%s), $Version (<= %s)", p.Name, p.Version))
+			if err != nil {
+				fmt.Println("filter packages by version, query string parse err: ", err)
+				c.AbortWithError(500, fmt.Errorf("unable to parse %s maximum version query string: %s", p.Name, err))
+			} else {
+				tmpList, err := list.Filter(deb.FilterOptions{
+					Queries: []deb.PackageQuery{versionQ},
+				})
+
+				if err == nil {
+					if tmpList.Len() > 0 {
+						tmpList.ForEach(func(tp *deb.Package) error {
+							list.Remove(tp)
+							return nil
+						})
+						list.Add(p)
+					}
+				} else {
+					fmt.Println("filter packages by version, filter err: ", err)
+					c.AbortWithError(500, fmt.Errorf("unable to get %s maximum version: %s", p.Name, err))
+				}
+			}
+
+			return nil
+		})
 	}
 
 	if c.Request.URL.Query().Get("format") == "details" {

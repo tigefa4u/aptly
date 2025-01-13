@@ -20,7 +20,7 @@ type PackageLike interface {
 // PackageCatalog is abstraction on top of PackageCollection and PackageList
 type PackageCatalog interface {
 	Scan(q PackageQuery) (result *PackageList)
-	Search(dep Dependency, allMatches bool) (searchResults []*Package)
+	Search(dep Dependency, allMatches bool, searchProvided bool) (searchResults []*Package)
 	SearchSupported() bool
 	SearchByKey(arch, name, version string) (result *PackageList)
 }
@@ -138,7 +138,7 @@ func (q *NotQuery) Matches(pkg PackageLike) bool {
 }
 
 // Fast is false
-func (q *NotQuery) Fast(list PackageCatalog) bool {
+func (q *NotQuery) Fast(_ PackageCatalog) bool {
 	return false
 }
 
@@ -197,7 +197,7 @@ func (q *FieldQuery) Query(list PackageCatalog) (result *PackageList) {
 }
 
 // Fast depends on the query
-func (q *FieldQuery) Fast(list PackageCatalog) bool {
+func (q *FieldQuery) Fast(_ PackageCatalog) bool {
 	return false
 }
 
@@ -244,7 +244,7 @@ func (q *DependencyQuery) Fast(list PackageCatalog) bool {
 func (q *DependencyQuery) Query(list PackageCatalog) (result *PackageList) {
 	if q.Fast(list) {
 		result = NewPackageList()
-		for _, pkg := range list.Search(q.Dep, true) {
+		for _, pkg := range list.Search(q.Dep, true, true) {
 			result.Add(pkg)
 		}
 	} else {
@@ -265,7 +265,7 @@ func (q *PkgQuery) Matches(pkg PackageLike) bool {
 }
 
 // Fast is always true for package query
-func (q *PkgQuery) Fast(list PackageCatalog) bool {
+func (q *PkgQuery) Fast(_ PackageCatalog) bool {
 	return true
 }
 
@@ -280,12 +280,12 @@ func (q *PkgQuery) String() string {
 }
 
 // Matches on specific properties
-func (q *MatchAllQuery) Matches(pkg PackageLike) bool {
+func (q *MatchAllQuery) Matches(_ PackageLike) bool {
 	return true
 }
 
 // Fast is always true for match all query
-func (q *MatchAllQuery) Fast(list PackageCatalog) bool {
+func (q *MatchAllQuery) Fast(_ PackageCatalog) bool {
 	return true
 }
 

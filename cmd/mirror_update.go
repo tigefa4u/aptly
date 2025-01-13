@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -41,20 +42,24 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 		}
 	}
 
-	ignoreMismatch := context.Flags().Lookup("ignore-checksums").Value.Get().(bool)
+	ignoreSignatures := context.Config().GpgDisableVerify
+	if context.Flags().IsSet("ignore-signatures") {
+		ignoreSignatures = context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
+	}
+	ignoreChecksums := context.Flags().Lookup("ignore-checksums").Value.Get().(bool)
 
 	verifier, err := getVerifier(context.Flags())
 	if err != nil {
 		return fmt.Errorf("unable to initialize GPG verifier: %s", err)
 	}
 
-	err = repo.Fetch(context.Downloader(), verifier)
+	err = repo.Fetch(context.Downloader(), verifier, ignoreSignatures)
 	if err != nil {
 		return fmt.Errorf("unable to update: %s", err)
 	}
 
 	context.Progress().Printf("Downloading & parsing package files...\n")
-	err = repo.DownloadPackageIndexes(context.Progress(), context.Downloader(), verifier, collectionFactory, ignoreMismatch)
+	err = repo.DownloadPackageIndexes(context.Progress(), context.Downloader(), verifier, collectionFactory, ignoreSignatures, ignoreChecksums)
 	if err != nil {
 		return fmt.Errorf("unable to update: %s", err)
 	}
@@ -161,7 +166,16 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 					var e error
 
 					// provision download location
-					task.TempDownPath, e = context.PackagePool().(aptly.LocalPackagePool).GenerateTempPath(task.File.Filename)
+					if pp, ok := context.PackagePool().(aptly.LocalPackagePool); ok {
+						task.TempDownPath, e = pp.GenerateTempPath(task.File.Filename)
+					} else {
+						var file *os.File
+						file, e = os.CreateTemp("", task.File.Filename)
+						if e == nil {
+							task.TempDownPath = file.Name()
+							file.Close()
+						}
+					}
 					if e != nil {
 						pushError(e)
 						continue
@@ -173,7 +187,7 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 						repo.PackageURL(task.File.DownloadURL()).String(),
 						task.TempDownPath,
 						&task.File.Checksums,
-						ignoreMismatch)
+						ignoreChecksums)
 					if e != nil {
 						pushError(e)
 						continue
@@ -196,6 +210,18 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("unable to update: %s", err)
 	}
+
+	defer func() {
+		for _, task := range queue {
+			if task.TempDownPath == "" {
+				continue
+			}
+
+			if err := os.Remove(task.TempDownPath); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "Failed to delete %s: %v\n", task.TempDownPath, err)
+			}
+		}
+	}()
 
 	// Import downloaded files
 	context.Progress().InitBar(int64(len(queue)), false, aptly.BarMirrorUpdateImportFiles)
@@ -241,7 +267,7 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 		return fmt.Errorf("unable to update: %s", err)
 	}
 
-	context.Progress().Printf("\nMirror `%s` has been successfully updated.\n", repo.Name)
+	context.Progress().Printf("\nMirror `%s` has been updated successfully.\n", repo.Name)
 	return err
 }
 

@@ -3,6 +3,7 @@ package api
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -16,17 +17,13 @@ import (
 	"github.com/rs/zerolog/log"
 )
 
-func getVerifier(ignoreSignatures bool, keyRings []string) (pgp.Verifier, error) {
-	if ignoreSignatures {
-		return nil, nil
-	}
-
+func getVerifier(keyRings []string) (pgp.Verifier, error) {
 	verifier := context.GetVerifier()
 	for _, keyRing := range keyRings {
 		verifier.AddKeyring(keyRing)
 	}
 
-	err := verifier.InitKeyring()
+	err := verifier.InitKeyring(false)
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +31,13 @@ func getVerifier(ignoreSignatures bool, keyRings []string) (pgp.Verifier, error)
 	return verifier, nil
 }
 
-// GET /api/mirrors
+// @Summary List Mirrors
+// @Description **Show list of currently available mirrors**
+// @Description Each mirror is returned as in “show” API.
+// @Tags Mirrors
+// @Produce json
+// @Success 200 {array} deb.RemoteRepo
+// @Router /api/mirrors [get]
 func apiMirrorsList(c *gin.Context) {
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.RemoteRepoCollection()
@@ -48,24 +51,49 @@ func apiMirrorsList(c *gin.Context) {
 	c.JSON(200, result)
 }
 
-// POST /api/mirrors
+type mirrorCreateParams struct {
+	// Name of mirror to be created
+	Name string `binding:"required"          json:"Name"              example:"mirror2"`
+	// Url of the archive to mirror
+	ArchiveURL string `binding:"required"    json:"ArchiveURL"        example:"http://deb.debian.org/debian"`
+	// Distribution name to mirror
+	Distribution string `                    json:"Distribution"      example:"'buster', for flat repositories use './'"`
+	// Package query that is applied to mirror packages
+	Filter string `                          json:"Filter"            example:"xserver-xorg"`
+	// Components to mirror, if not specified aptly would fetch all components
+	Components []string `                    json:"Components"        example:"main"`
+	// Limit mirror to those architectures, if not specified aptly would fetch all architectures
+	Architectures []string `                 json:"Architectures"     example:"amd64"`
+	// Gpg keyring(s) for verifying Release file
+	Keyrings []string `                      json:"Keyrings"          example:"trustedkeys.gpg"`
+	// Set "true" to mirror source packages
+	DownloadSources bool `                   json:"DownloadSources"`
+	// Set "true" to mirror udeb files
+	DownloadUdebs bool `                     json:"DownloadUdebs"`
+	// Set "true" to mirror installer files
+	DownloadInstaller bool `                 json:"DownloadInstaller"`
+	// Set "true" to include dependencies of matching packages when filtering
+	FilterWithDeps bool `                    json:"FilterWithDeps"`
+	// Set "true" to skip if the given components are in the Release file
+	SkipComponentCheck bool `                json:"SkipComponentCheck"`
+	// Set "true" to skip the verification of architectures
+	SkipArchitectureCheck bool `             json:"SkipArchitectureCheck"`
+	// Set "true" to skip the verification of Release file signatures
+	IgnoreSignatures bool `                  json:"IgnoreSignatures"`
+}
+
+// @Summary Create Mirror
+// @Description **Create a mirror of a remote repository**
+// @Tags Mirrors
+// @Consume json
+// @Param request body mirrorCreateParams true "Parameters"
+// @Produce json
+// @Success 200 {object} deb.RemoteRepo
+// @Failure 400 {object} Error "Bad Request"
+// @Router /api/mirrors [post]
 func apiMirrorsCreate(c *gin.Context) {
 	var err error
-	var b struct {
-		Name               string `binding:"required"`
-		ArchiveURL         string `binding:"required"`
-		Distribution       string
-		Filter             string
-		Components         []string
-		Architectures      []string
-		Keyrings           []string
-		DownloadSources    bool
-		DownloadUdebs      bool
-		DownloadInstaller  bool
-		FilterWithDeps     bool
-		SkipComponentCheck bool
-		IgnoreSignatures   bool
-	}
+	var b mirrorCreateParams
 
 	b.DownloadSources = context.Config().DownloadSourcePackages
 	b.IgnoreSignatures = context.Config().GpgDisableVerify
@@ -105,17 +133,18 @@ func apiMirrorsCreate(c *gin.Context) {
 	repo.Filter = b.Filter
 	repo.FilterWithDeps = b.FilterWithDeps
 	repo.SkipComponentCheck = b.SkipComponentCheck
+	repo.SkipArchitectureCheck = b.SkipArchitectureCheck
 	repo.DownloadSources = b.DownloadSources
 	repo.DownloadUdebs = b.DownloadUdebs
 
-	verifier, err := getVerifier(b.IgnoreSignatures, b.Keyrings)
+	verifier, err := getVerifier(b.Keyrings)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to initialize GPG verifier: %s", err))
 		return
 	}
 
 	downloader := context.NewDownloader(nil)
-	err = repo.Fetch(downloader, verifier)
+	err = repo.Fetch(downloader, verifier, b.IgnoreSignatures)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to fetch mirror: %s", err))
 		return
@@ -130,7 +159,18 @@ func apiMirrorsCreate(c *gin.Context) {
 	c.JSON(201, repo)
 }
 
-// DELETE /api/mirrors/:name
+// @Summary Delete Mirror
+// @Description **Delete a mirror**
+// @Tags Mirrors
+// @Param name path string true "mirror name"
+// @Param force query int true "force: 1 to enable"
+// @Param _async query bool false "Run in background and return task object"
+// @Produce json
+// @Success 200 {object} task.ProcessReturnValue
+// @Failure 404 {object} Error "Mirror not found"
+// @Failure 403 {object} Error "Unable to delete mirror with snapshots"
+// @Failure 500 {object} Error "Unable to delete"
+// @Router /api/mirrors/{name} [delete]
 func apiMirrorsDrop(c *gin.Context) {
 	name := c.Params.ByName("name")
 	force := c.Request.URL.Query().Get("force") == "1"
@@ -147,7 +187,7 @@ func apiMirrorsDrop(c *gin.Context) {
 
 	resources := []string{string(repo.Key())}
 	taskName := fmt.Sprintf("Delete mirror %s", name)
-	maybeRunTaskInBackground(c, taskName, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
+	maybeRunTaskInBackground(c, taskName, resources, func(_ aptly.Progress, _ *task.Detail) (*task.ProcessReturnValue, error) {
 		err := repo.CheckLock()
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to drop: %v", err)
@@ -157,7 +197,7 @@ func apiMirrorsDrop(c *gin.Context) {
 			snapshots := snapshotCollection.ByRemoteRepoSource(repo)
 
 			if len(snapshots) > 0 {
-				return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("won't delete mirror with snapshots, use 'force=1' to override")
+				return &task.ProcessReturnValue{Code: http.StatusForbidden, Value: nil}, fmt.Errorf("won't delete mirror with snapshots, use 'force=1' to override")
 			}
 		}
 
@@ -169,7 +209,15 @@ func apiMirrorsDrop(c *gin.Context) {
 	})
 }
 
-// GET /api/mirrors/:name
+// @Summary Get Mirror Info
+// @Description **Get mirror information by name**
+// @Tags Mirrors
+// @Param name path string true "mirror name"
+// @Produce json
+// @Success 200 {object} deb.RemoteRepo
+// @Failure 404 {object} Error "Mirror not found"
+// @Failure 500 {object} Error "Internal Error"
+// @Router /api/mirrors/{name} [get]
 func apiMirrorsShow(c *gin.Context) {
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.RemoteRepoCollection()
@@ -189,7 +237,18 @@ func apiMirrorsShow(c *gin.Context) {
 	c.JSON(200, repo)
 }
 
-// GET /api/mirrors/:name/packages
+// @Summary List Mirror Packages
+// @Description **Get a list of packages from a mirror**
+// @Tags Mirrors
+// @Param name path string true "mirror name"
+// @Param q query string false "search query"
+// @Param format query string false "format: `details` for more detailed information"
+// @Produce json
+// @Success 200 {array} deb.Package "List of Packages"
+// @Failure 400 {object} Error "Unable to determine list of architectures"
+// @Failure 404 {object} Error "Mirror not found"
+// @Failure 500 {object} Error "Internal Error"
+// @Router /api/mirrors/{name}/packages [get]
 func apiMirrorsPackages(c *gin.Context) {
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.RemoteRepoCollection()
@@ -248,8 +307,12 @@ func apiMirrorsPackages(c *gin.Context) {
 
 		list.PrepareIndex()
 
-		list, err = list.Filter([]deb.PackageQuery{q}, withDeps,
-			nil, context.DependencyOptions(), architecturesList)
+		list, err = list.Filter(deb.FilterOptions{
+			Queries:           []deb.PackageQuery{q},
+			WithDependencies:  withDeps,
+			DependencyOptions: context.DependencyOptions(),
+			Architectures:     architecturesList,
+		})
 		if err != nil {
 			AbortWithJSONError(c, 500, fmt.Errorf("unable to search: %s", err))
 		}
@@ -267,29 +330,59 @@ func apiMirrorsPackages(c *gin.Context) {
 	}
 }
 
-// PUT /api/mirrors/:name
+type mirrorUpdateParams struct {
+	// Change mirror name to `Name`
+	Name string `                 json:"Name"                   example:"mirror1"`
+	// Url of the archive to mirror
+	ArchiveURL string `           json:"ArchiveURL"             example:"http://deb.debian.org/debian"`
+	// Package query that is applied to mirror packages
+	Filter string `               json:"Filter"                 example:"xserver-xorg"`
+	// Limit mirror to those architectures, if not specified aptly would fetch all architectures
+	Architectures []string `      json:"Architectures"          example:"amd64"`
+	// Components to mirror, if not specified aptly would fetch all components
+	Components []string `         json:"Components"             example:"main"`
+	// Gpg keyring(s) for verifing Release file
+	Keyrings []string `           json:"Keyrings"               example:"trustedkeys.gpg"`
+	// Set "true" to include dependencies of matching packages when filtering
+	FilterWithDeps bool `         json:"FilterWithDeps"`
+	// Set "true" to mirror source packages
+	DownloadSources bool `        json:"DownloadSources"`
+	// Set "true" to mirror udeb files
+	DownloadUdebs bool `          json:"DownloadUdebs"`
+	// Set "true" to skip checking if the given components are in the Release file
+	SkipComponentCheck bool `     json:"SkipComponentCheck"`
+	// Set "true" to skip checking if the given architectures are in the Release file
+	SkipArchitectureCheck bool `  json:"SkipArchitectureCheck"`
+	// Set "true" to ignore checksum errors
+	IgnoreChecksums bool `        json:"IgnoreChecksums"`
+	// Set "true" to skip the verification of Release file signatures
+	IgnoreSignatures bool `       json:"IgnoreSignatures"`
+	// Set "true" to force a mirror update even if another process is already updating the mirror (use with caution!)
+	ForceUpdate bool `            json:"ForceUpdate"`
+	// Set "true" to skip downloading already downloaded packages
+	SkipExistingPackages bool `   json:"SkipExistingPackages"`
+}
+
+// @Summary Update Mirror
+// @Description **Update Mirror and download packages**
+// @Tags Mirrors
+// @Param name path string true "mirror name to update"
+// @Consume json
+// @Param request body mirrorUpdateParams true "Parameters"
+// @Param _async query bool false "Run in background and return task object"
+// @Produce json
+// @Success 200 {object} task.ProcessReturnValue "Mirror was updated successfully"
+// @Success 202 {object} task.Task "Mirror is being updated"
+// @Failure 400 {object} Error "Unable to determine list of architectures"
+// @Failure 404 {object} Error "Mirror not found"
+// @Failure 500 {object} Error "Internal Error"
+// @Router /api/mirrors/{name} [put]
 func apiMirrorsUpdate(c *gin.Context) {
 	var (
 		err    error
 		remote *deb.RemoteRepo
+		b      mirrorUpdateParams
 	)
-
-	var b struct {
-		Name                 string
-		ArchiveURL           string
-		Filter               string
-		Architectures        []string
-		Components           []string
-		Keyrings             []string
-		FilterWithDeps       bool
-		DownloadSources      bool
-		DownloadUdebs        bool
-		SkipComponentCheck   bool
-		IgnoreChecksums      bool
-		IgnoreSignatures     bool
-		ForceUpdate          bool
-		SkipExistingPackages bool
-	}
 
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.RemoteRepoCollection()
@@ -304,12 +397,14 @@ func apiMirrorsUpdate(c *gin.Context) {
 	b.DownloadUdebs = remote.DownloadUdebs
 	b.DownloadSources = remote.DownloadSources
 	b.SkipComponentCheck = remote.SkipComponentCheck
+	b.SkipArchitectureCheck = remote.SkipArchitectureCheck
 	b.FilterWithDeps = remote.FilterWithDeps
 	b.Filter = remote.Filter
 	b.Architectures = remote.Architectures
 	b.Components = remote.Components
+	b.IgnoreSignatures = context.Config().GpgDisableVerify
 
-	log.Info().Msgf("%s: Starting mirror update\n", b.Name)
+	log.Info().Msgf("%s: Starting mirror update", b.Name)
 
 	if c.Bind(&b) != nil {
 		return
@@ -338,12 +433,13 @@ func apiMirrorsUpdate(c *gin.Context) {
 	remote.DownloadUdebs = b.DownloadUdebs
 	remote.DownloadSources = b.DownloadSources
 	remote.SkipComponentCheck = b.SkipComponentCheck
+	remote.SkipArchitectureCheck = b.SkipArchitectureCheck
 	remote.FilterWithDeps = b.FilterWithDeps
 	remote.Filter = b.Filter
 	remote.Architectures = b.Architectures
 	remote.Components = b.Components
 
-	verifier, err := getVerifier(b.IgnoreSignatures, b.Keyrings)
+	verifier, err := getVerifier(b.Keyrings)
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to initialize GPG verifier: %s", err))
 		return
@@ -353,7 +449,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 	maybeRunTaskInBackground(c, "Update mirror "+b.Name, resources, func(out aptly.Progress, detail *task.Detail) (*task.ProcessReturnValue, error) {
 
 		downloader := context.NewDownloader(out)
-		err := remote.Fetch(downloader, verifier)
+		err := remote.Fetch(downloader, verifier, b.IgnoreSignatures)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
@@ -365,7 +461,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 			}
 		}
 
-		err = remote.DownloadPackageIndexes(out, downloader, verifier, collectionFactory, b.SkipComponentCheck)
+		err = remote.DownloadPackageIndexes(out, downloader, verifier, collectionFactory, b.IgnoreSignatures, b.SkipComponentCheck)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
@@ -458,7 +554,7 @@ func apiMirrorsUpdate(c *gin.Context) {
 			}
 		}()
 
-		log.Info().Msgf("%s: Spawning background processes...\n", b.Name)
+		log.Info().Msgf("%s: Spawning background processes...", b.Name)
 		var wg sync.WaitGroup
 		for i := 0; i < context.Config().DownloadConcurrency; i++ {
 			wg.Add(1)
@@ -476,7 +572,16 @@ func apiMirrorsUpdate(c *gin.Context) {
 						var e error
 
 						// provision download location
-						task.TempDownPath, e = context.PackagePool().(aptly.LocalPackagePool).GenerateTempPath(task.File.Filename)
+						if pp, ok := context.PackagePool().(aptly.LocalPackagePool); ok {
+							task.TempDownPath, e = pp.GenerateTempPath(task.File.Filename)
+						} else {
+							var file *os.File
+							file, e = os.CreateTemp("", task.File.Filename)
+							if e == nil {
+								task.TempDownPath = file.Name()
+								file.Close()
+							}
+						}
 						if e != nil {
 							pushError(e)
 							continue
@@ -494,6 +599,20 @@ func apiMirrorsUpdate(c *gin.Context) {
 							continue
 						}
 
+						// and import it back to the pool
+						task.File.PoolPath, err = context.PackagePool().Import(task.TempDownPath, task.File.Filename, &task.File.Checksums, true, collectionFactory.ChecksumCollection(nil))
+						if err != nil {
+							//return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to import file: %s", err)
+							pushError(err)
+							continue
+						}
+
+						// update "attached" files if any
+						for _, additionalAtask := range task.Additional {
+							additionalAtask.File.PoolPath = task.File.PoolPath
+							additionalAtask.File.Checksums = task.File.Checksums
+						}
+
 						task.Done = true
 						taskFinished <- task
 					case <-context.Done():
@@ -505,32 +624,22 @@ func apiMirrorsUpdate(c *gin.Context) {
 		}
 
 		// Wait for all download goroutines to finish
-		log.Info().Msgf("%s: Waiting for background processes to finish...\n", b.Name)
+		log.Info().Msgf("%s: Waiting for background processes to finish...", b.Name)
 		wg.Wait()
-		log.Info().Msgf("%s: Background processes finished\n", b.Name)
+		log.Info().Msgf("%s: Background processes finished", b.Name)
 		close(taskFinished)
 
-		for idx := range queue {
+		defer func() {
+			for _, task := range queue {
+				if task.TempDownPath == "" {
+					continue
+				}
 
-			atask := &queue[idx]
-
-			if !atask.Done {
-				// download not finished yet
-				continue
+				if err := os.Remove(task.TempDownPath); err != nil && !os.IsNotExist(err) {
+					fmt.Fprintf(os.Stderr, "Failed to delete %s: %v\n", task.TempDownPath, err)
+				}
 			}
-
-			// and import it back to the pool
-			atask.File.PoolPath, err = context.PackagePool().Import(atask.TempDownPath, atask.File.Filename, &atask.File.Checksums, true, collectionFactory.ChecksumCollection(nil))
-			if err != nil {
-				return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to import file: %s", err)
-			}
-
-			// update "attached" files if any
-			for _, additionalAtask := range atask.Additional {
-				additionalAtask.File.PoolPath = atask.File.PoolPath
-				additionalAtask.File.Checksums = atask.File.Checksums
-			}
-		}
+		}()
 
 		select {
 		case <-context.Done():
@@ -539,18 +648,18 @@ func apiMirrorsUpdate(c *gin.Context) {
 		}
 
 		if len(errors) > 0 {
-			log.Info().Msgf("%s: Unable to update because of previous errors\n", b.Name)
+			log.Info().Msgf("%s: Unable to update because of previous errors", b.Name)
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: download errors:\n  %s", strings.Join(errors, "\n  "))
 		}
 
-		log.Info().Msgf("%s: Finalizing download\n", b.Name)
+		log.Info().Msgf("%s: Finalizing download...", b.Name)
 		remote.FinalizeDownload(collectionFactory, out)
 		err = collectionFactory.RemoteRepoCollection().Update(remote)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
 		}
 
-		log.Info().Msgf("%s: Mirror updated successfully!\n", b.Name)
+		log.Info().Msgf("%s: Mirror updated successfully", b.Name)
 		return &task.ProcessReturnValue{Code: http.StatusNoContent, Value: nil}, nil
 	})
 }

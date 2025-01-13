@@ -1,6 +1,7 @@
 package task
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"github.com/aptly-dev/aptly/aptly"
@@ -46,20 +47,25 @@ type Task struct {
 	detail             *Detail
 	process            Process
 	processReturnValue *ProcessReturnValue
+	err                error
 	Name               string
 	ID                 int
 	State              State
+	resources          []string
+	wgTask             *sync.WaitGroup
 }
 
 // NewTask creates new task
-func NewTask(process Process, name string, ID int) *Task {
+func NewTask(process Process, name string, ID int, resources []string, wgTask *sync.WaitGroup) *Task {
 	task := &Task{
-		output:  NewOutput(),
-		detail:  &Detail{},
-		process: process,
-		Name:    name,
-		ID:      ID,
-		State:   IDLE,
+		output:    NewOutput(),
+		detail:    &Detail{},
+		process:   process,
+		Name:      name,
+		ID:        ID,
+		State:     IDLE,
+		resources: resources,
+		wgTask:    wgTask,
 	}
 	return task
 }

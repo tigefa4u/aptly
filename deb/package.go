@@ -10,6 +10,7 @@ import (
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/utils"
+	"github.com/rs/zerolog/log"
 )
 
 // Package is single instance of Debian package
@@ -189,7 +190,12 @@ func NewInstallerPackageFromControlFile(input Stanza, repo *RemoteRepo, componen
 		return nil, err
 	}
 
-	relPath := filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "images")
+	var relPath string
+	if repo.Distribution == aptly.DistributionFocal {
+		relPath = filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "legacy-images")
+	} else {
+		relPath = filepath.Join("dists", repo.Distribution, component, fmt.Sprintf("%s-%s", p.Name, architecture), "current", "images")
+	}
 	for i := range files {
 		files[i].downloadPath = relPath
 
@@ -307,6 +313,23 @@ func (p *Package) GetField(name string) string {
 	}
 }
 
+// ProvidedPackages returns just the package names of the provided packages (without version numbers such as
+// `(= 1.2.3)`).
+func (p *Package) ProvidedPackages() []string {
+	result := make([]string, len(p.Provides))
+	for i, provided := range p.Provides {
+		providedDep, err := ParseDependency(provided)
+		if err != nil {
+			// Should never happen, but I included this, so it definitely has the old behavior in case there is no
+			// special syntax.
+			result[i] = provided
+		} else {
+			result[i] = providedDep.Pkg
+		}
+	}
+	return result
+}
+
 // MatchesArchitecture checks whether packages matches specified architecture
 func (p *Package) MatchesArchitecture(arch string) bool {
 	if p.Architecture == ArchitectureAll && arch != ArchitectureSource {
@@ -316,24 +339,73 @@ func (p *Package) MatchesArchitecture(arch string) bool {
 	return p.Architecture == arch
 }
 
+func JoinErrors(errs ...error) error {
+	var combinedErr error
+	for _, err := range errs {
+		if err != nil {
+			if combinedErr == nil {
+				combinedErr = err
+			} else {
+				combinedErr = fmt.Errorf("%w\n%v", combinedErr, err)
+			}
+		}
+	}
+	return combinedErr
+}
+
+// providesDependency checks if the package `Provide:`s the dependency, assuming that the architecture matches.
+// If the `Provides:` entry includes a version number, it will be considered when checking the dependency.
+func (p *Package) providesDependency(dep Dependency) (bool, error) {
+	var errs []error // won't cause an allocation in case of no errors
+	for _, provided := range p.Provides {
+		providedDep, err := ParseDependency(provided)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		if providedDep.Relation != VersionEqual && providedDep.Relation != VersionDontCare {
+			// The only relation allowed here is `=`.
+			// > The relations allowed are [...]. The exception is the Provides field, for which only = is allowed.
+			// > [...]
+			// > A Provides field may contain version numbers, and such a version number will be considered when
+			// > considering a dependency on or conflict with the virtual package name.
+			// -- https://www.debian.org/doc/debian-policy/ch-relationships.html
+			errs = append(errs, fmt.Errorf("unsupported relation in Provides: %s", providedDep.String()))
+			continue
+		}
+		providedVersion := providedDep.Version
+		if providedVersion == "" {
+			providedVersion = p.Version
+		}
+		if providedDep.Pkg == dep.Pkg && versionSatisfiesDependency(providedVersion, dep) {
+			return true, nil
+		}
+	}
+	return false, JoinErrors(errs...)
+}
+
 // MatchesDependency checks whether package matches specified dependency
 func (p *Package) MatchesDependency(dep Dependency) bool {
 	if dep.Architecture != "" && !p.MatchesArchitecture(dep.Architecture) {
 		return false
 	}
 
-	if dep.Relation == VersionDontCare {
-		if utils.StrSliceHasItem(p.Provides, dep.Pkg) {
-			return true
-		}
-		return dep.Pkg == p.Name
+	providesDep, err := p.providesDependency(dep)
+	if err != nil {
+		log.Warn().Err(err).Msg("Error while checking if package provides dependency")
+	}
+	if providesDep {
+		return true
 	}
 
 	if dep.Pkg != p.Name {
 		return false
 	}
 
-	r := CompareVersions(p.Version, dep.Version)
+	return versionSatisfiesDependency(p.Version, dep)
+}
+
+func versionSatisfiesDependency(version string, dep Dependency) bool {
+	r := CompareVersions(version, dep.Version)
 
 	switch dep.Relation {
 	case VersionEqual:
@@ -347,13 +419,15 @@ func (p *Package) MatchesDependency(dep Dependency) bool {
 	case VersionGreaterOrEqual:
 		return r >= 0
 	case VersionPatternMatch:
-		matched, err := filepath.Match(dep.Version, p.Version)
+		matched, err := filepath.Match(dep.Version, version)
 		return err == nil && matched
 	case VersionRegexp:
-		return dep.Regexp.FindStringIndex(p.Version) != nil
+		return dep.Regexp.FindStringIndex(version) != nil
+	case VersionDontCare:
+		return true
+	default:
+		panic(fmt.Sprintf("unknown relation: %d", dep.Relation))
 	}
-
-	panic("unknown relation")
 }
 
 // GetName returns package name
@@ -376,7 +450,7 @@ func (p *Package) GetArchitecture() string {
 	return p.Architecture
 }
 
-// GetDependencies compiles list of dependncies by flags from options
+// GetDependencies compiles list of dependencies by flags from options
 func (p *Package) GetDependencies(options int) (dependencies []string) {
 	deps := p.Deps()
 
@@ -621,9 +695,7 @@ func (p *Package) LinkFromPool(publishedStorage aptly.PublishedStorage, packageP
 			return err
 		}
 
-		publishedDirectory := filepath.Join(prefix, relPath)
-
-		err = publishedStorage.LinkFromPool(publishedDirectory, f.Filename, packagePool, sourcePoolPath, f.Checksums, force)
+		err = publishedStorage.LinkFromPool(prefix, relPath, f.Filename, packagePool, sourcePoolPath, f.Checksums, force)
 		if err != nil {
 			return err
 		}

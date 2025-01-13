@@ -1,9 +1,7 @@
 package main
 
 import (
-	"math/rand"
 	"os"
-	"time"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/cmd"
@@ -15,14 +13,16 @@ import (
 //go:embed VERSION
 var Version string
 
+//go:embed debian/aptly.conf
+var AptlyConf []byte
+
 func main() {
 	if Version == "" {
 		Version = "unknown"
 	}
 
 	aptly.Version = Version
-
-	rand.Seed(time.Now().UnixNano())
+	aptly.AptlyConf = AptlyConf
 
 	os.Exit(cmd.Run(cmd.RootCommand(), os.Args[1:], true))
 }

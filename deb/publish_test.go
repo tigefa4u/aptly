@@ -2,11 +2,13 @@ package deb
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/database"
@@ -133,19 +135,19 @@ func (s *PublishedRepoSuite) SetUpTest(c *C) {
 	s.packageCollection.Update(s.p2)
 	s.packageCollection.Update(s.p3)
 
-	s.repo, _ = NewPublishedRepo("", "ppa", "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory)
+	s.repo, _ = NewPublishedRepo("", "ppa", "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory, false)
 	s.repo.SkipContents = true
 
-	s.repo2, _ = NewPublishedRepo("", "ppa", "maverick", nil, []string{"main"}, []interface{}{s.localRepo}, s.factory)
+	s.repo2, _ = NewPublishedRepo("", "ppa", "maverick", nil, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
 	s.repo2.SkipContents = true
 
-	s.repo3, _ = NewPublishedRepo("", "linux", "natty", nil, []string{"main", "contrib"}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
+	s.repo3, _ = NewPublishedRepo("", "linux", "natty", nil, []string{"main", "contrib"}, []interface{}{s.snapshot, s.snapshot2}, s.factory, false)
 	s.repo3.SkipContents = true
 
-	s.repo4, _ = NewPublishedRepo("", "ppa", "maverick", []string{"source"}, []string{"main"}, []interface{}{s.localRepo}, s.factory)
+	s.repo4, _ = NewPublishedRepo("", "ppa", "maverick", []string{"source"}, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
 	s.repo4.SkipContents = true
 
-	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "maverick", []string{"source"}, []string{"main"}, []interface{}{s.localRepo}, s.factory)
+	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "maverick", []string{"source"}, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
 	s.repo5.SkipContents = true
 }
 
@@ -177,19 +179,71 @@ func (s *PublishedRepoSuite) TestNewPublishedRepo(c *C) {
 	c.Check(s.repo3.RefList("main").Len(), Equals, 3)
 	c.Check(s.repo3.RefList("contrib").Len(), Equals, 3)
 
-	c.Check(func() { NewPublishedRepo("", ".", "a", nil, nil, nil, s.factory) }, PanicMatches, "publish with empty sources")
+	c.Check(func() { NewPublishedRepo("", ".", "a", nil, nil, nil, s.factory, false) }, PanicMatches, "publish with empty sources")
 	c.Check(func() {
-		NewPublishedRepo("", ".", "a", nil, []string{"main"}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
+		NewPublishedRepo("", ".", "a", nil, []string{"main"}, []interface{}{s.snapshot, s.snapshot2}, s.factory, false)
 	}, PanicMatches, "sources and components should be equal in size")
 	c.Check(func() {
-		NewPublishedRepo("", ".", "a", nil, []string{"main", "contrib"}, []interface{}{s.localRepo, s.snapshot2}, s.factory)
+		NewPublishedRepo("", ".", "a", nil, []string{"main", "contrib"}, []interface{}{s.localRepo, s.snapshot2}, s.factory, false)
 	}, PanicMatches, "interface conversion:.*")
 
-	_, err := NewPublishedRepo("", ".", "a", nil, []string{"main", "main"}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
+	_, err := NewPublishedRepo("", ".", "a", nil, []string{"main", "main"}, []interface{}{s.snapshot, s.snapshot2}, s.factory, false)
 	c.Check(err, ErrorMatches, "duplicate component name: main")
 
-	_, err = NewPublishedRepo("", ".", "wheezy/updates", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory)
-	c.Check(err, ErrorMatches, "invalid distribution wheezy/updates, '/' is not allowed")
+	_, err = NewPublishedRepo("", ".", "wheezy/updates", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory, false)
+	c.Check(err, IsNil)
+}
+
+func (s *PublishedRepoSuite) TestMultiDistPool(c *C) {
+	repo, err := NewPublishedRepo("", "ppa", "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory, true)
+	c.Assert(err, IsNil)
+	err = repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
+	c.Assert(err, IsNil)
+
+	publishedStorage := files.NewPublishedStorage(s.root, "", "")
+
+	c.Check(repo.Architectures, DeepEquals, []string{"i386"})
+
+	rf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
+	c.Assert(err, IsNil)
+
+	cfr := NewControlFileReader(rf, true, false)
+	st, err := cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["Origin"], Equals, "ppa squeeze")
+	c.Check(st["Components"], Equals, "main")
+	c.Check(st["Architectures"], Equals, "i386")
+
+	pf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/main/binary-i386/Packages"))
+	c.Assert(err, IsNil)
+
+	cfr = NewControlFileReader(pf, false, false)
+
+	for i := 0; i < 3; i++ {
+		st, err = cfr.ReadStanza()
+		c.Assert(err, IsNil)
+
+		c.Check(st["Filename"], Equals, "pool/squeeze/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb")
+	}
+
+	st, err = cfr.ReadStanza()
+	c.Assert(err, IsNil)
+	c.Assert(st, IsNil)
+
+	drf, err := os.Open(filepath.Join(publishedStorage.PublicPath(), "ppa/dists/squeeze/main/binary-i386/Release"))
+	c.Assert(err, IsNil)
+
+	cfr = NewControlFileReader(drf, true, false)
+	st, err = cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["Archive"], Equals, "squeeze")
+	c.Check(st["Architecture"], Equals, "i386")
+
+	_, err = os.Stat(filepath.Join(publishedStorage.PublicPath(), "ppa/pool/squeeze/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb"))
+	c.Assert(err, IsNil)
+
 }
 
 func (s *PublishedRepoSuite) TestPrefixNormalization(c *C) {
@@ -248,7 +302,7 @@ func (s *PublishedRepoSuite) TestPrefixNormalization(c *C) {
 			errorExpected: "invalid prefix .*",
 		},
 	} {
-		repo, err := NewPublishedRepo("", t.prefix, "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory)
+		repo, err := NewPublishedRepo("", t.prefix, "squeeze", nil, []string{"main"}, []interface{}{s.snapshot}, s.factory, false)
 		if t.errorExpected != "" {
 			c.Check(err, ErrorMatches, t.errorExpected)
 		} else {
@@ -258,56 +312,75 @@ func (s *PublishedRepoSuite) TestPrefixNormalization(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestDistributionComponentGuessing(c *C) {
-	repo, err := NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.snapshot}, s.factory)
+	repo, err := NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.snapshot}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "squeeze")
 	c.Check(repo.Components(), DeepEquals, []string{"main"})
 
-	repo, err = NewPublishedRepo("", "ppa", "wheezy", nil, []string{""}, []interface{}{s.snapshot}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "wheezy", nil, []string{""}, []interface{}{s.snapshot}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "wheezy")
 	c.Check(repo.Components(), DeepEquals, []string{"main"})
 
-	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{"non-free"}, []interface{}{s.snapshot}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{"non-free"}, []interface{}{s.snapshot}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "squeeze")
 	c.Check(repo.Components(), DeepEquals, []string{"non-free"})
 
-	repo, err = NewPublishedRepo("", "ppa", "squeeze", nil, []string{""}, []interface{}{s.localRepo}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "squeeze", nil, []string{""}, []interface{}{s.localRepo}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "squeeze")
 	c.Check(repo.Components(), DeepEquals, []string{"main"})
 
-	_, err = NewPublishedRepo("", "ppa", "", nil, []string{"main"}, []interface{}{s.localRepo}, s.factory)
+	_, err = NewPublishedRepo("", "ppa", "", nil, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
 	c.Check(err, ErrorMatches, "unable to guess distribution name, please specify explicitly")
 
 	s.localRepo.DefaultDistribution = "precise"
 	s.localRepo.DefaultComponent = "contrib"
 	s.factory.LocalRepoCollection().Update(s.localRepo)
 
-	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.localRepo}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.localRepo}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "precise")
 	c.Check(repo.Components(), DeepEquals, []string{"contrib"})
 
 	s.localRepo.DefaultDistribution = "precise/updates"
 
-	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.localRepo}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{""}, []interface{}{s.localRepo}, s.factory, false)
 	c.Check(err, IsNil)
-	c.Check(repo.Distribution, Equals, "precise-updates")
+	c.Check(repo.Distribution, Equals, "precise/updates")
 	c.Check(repo.Components(), DeepEquals, []string{"contrib"})
 
-	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{"", "contrib"}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
+	repo, err = NewPublishedRepo("", "ppa", "", nil, []string{"", "contrib"}, []interface{}{s.snapshot, s.snapshot2}, s.factory, false)
 	c.Check(err, IsNil)
 	c.Check(repo.Distribution, Equals, "squeeze")
 	c.Check(repo.Components(), DeepEquals, []string{"contrib", "main"})
 
-	_, err = NewPublishedRepo("", "ppa", "", nil, []string{"", ""}, []interface{}{s.snapshot, s.snapshot2}, s.factory)
+	_, err = NewPublishedRepo("", "ppa", "", nil, []string{"", ""}, []interface{}{s.snapshot, s.snapshot2}, s.factory, false)
 	c.Check(err, ErrorMatches, "duplicate component name: main")
 }
 
+func (s *PublishedRepoSuite) TestUpdate(c *C) {
+	revision := s.repo2.ObtainRevision()
+	sources := revision.Sources
+	sources["test"] = "local1"
+
+	result, err := s.repo2.Update(s.factory, nil)
+	c.Assert(err, IsNil)
+	c.Assert(result, NotNil)
+	c.Assert(s.repo2.Revision, IsNil)
+
+	c.Assert(result.AddedSources, DeepEquals, map[string]string{"test": "local1"})
+	c.Assert(result.UpdatedSources, DeepEquals, map[string]string{"main": "local1"})
+	c.Assert(result.RemovedSources, DeepEquals, map[string]string{})
+
+	c.Assert(result.AddedComponents(), DeepEquals, []string{"test"})
+	c.Assert(result.UpdatedComponents(), DeepEquals, []string{"main"})
+	c.Assert(result.RemovedComponents(), DeepEquals, []string{})
+}
+
 func (s *PublishedRepoSuite) TestPublish(c *C) {
-	err := s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false)
+	err := s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
 	c.Assert(err, IsNil)
 
 	c.Check(s.repo.Architectures, DeepEquals, []string{"i386"})
@@ -354,7 +427,7 @@ func (s *PublishedRepoSuite) TestPublish(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {
-	err := s.repo.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, "")
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"), PathExists)
@@ -362,7 +435,7 @@ func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishLocalRepo(c *C) {
-	err := s.repo2.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo2.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, "")
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -370,7 +443,7 @@ func (s *PublishedRepoSuite) TestPublishLocalRepo(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishLocalSourceRepo(c *C) {
-	err := s.repo4.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo4.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, "")
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -378,7 +451,7 @@ func (s *PublishedRepoSuite) TestPublishLocalSourceRepo(c *C) {
 }
 
 func (s *PublishedRepoSuite) TestPublishOtherStorage(c *C) {
-	err := s.repo5.Publish(s.packagePool, s.provider, s.factory, nil, nil, false)
+	err := s.repo5.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, "")
 	c.Assert(err, IsNil)
 
 	c.Check(filepath.Join(s.publishedStorage2.PublicPath(), "ppa/dists/maverick/Release"), PathExists)
@@ -390,10 +463,10 @@ func (s *PublishedRepoSuite) TestString(c *C) {
 		"ppa/squeeze [] publishes {main: [snap]: Snapshot from mirror [yandex]: http://mirror.yandex.ru/debian/ squeeze}")
 	c.Check(s.repo2.String(), Equals,
 		"ppa/maverick [] publishes {main: [local1]: comment1}")
-	repo, _ := NewPublishedRepo("", "", "squeeze", []string{"s390"}, []string{"main"}, []interface{}{s.snapshot}, s.factory)
+	repo, _ := NewPublishedRepo("", "", "squeeze", []string{"s390"}, []string{"main"}, []interface{}{s.snapshot}, s.factory, false)
 	c.Check(repo.String(), Equals,
 		"./squeeze [s390] publishes {main: [snap]: Snapshot from mirror [yandex]: http://mirror.yandex.ru/debian/ squeeze}")
-	repo, _ = NewPublishedRepo("", "", "squeeze", []string{"i386", "amd64"}, []string{"main"}, []interface{}{s.snapshot}, s.factory)
+	repo, _ = NewPublishedRepo("", "", "squeeze", []string{"i386", "amd64"}, []string{"main"}, []interface{}{s.snapshot}, s.factory, false)
 	c.Check(repo.String(), Equals,
 		"./squeeze [i386, amd64] publishes {main: [snap]: Snapshot from mirror [yandex]: http://mirror.yandex.ru/debian/ squeeze}")
 	repo.Origin = "myorigin"
@@ -436,6 +509,30 @@ func (s *PublishedRepoSuite) TestEncodeDecode(c *C) {
 	c.Assert(repo2, DeepEquals, s.repo2)
 }
 
+func (s *PublishedRepoSuite) TestPublishedRepoRevision(c *C) {
+	revision := s.repo2.ObtainRevision()
+	c.Assert(revision, NotNil)
+
+	sources := revision.Sources
+	c.Assert(sources, NotNil)
+	c.Assert(sources, DeepEquals, map[string]string{"main": "local1"})
+
+	sources["test1"] = "snap1"
+	sources["test2"] = "snap2"
+
+	c.Assert(revision.Components(), DeepEquals, []string{"main", "test1", "test2"})
+	c.Assert(revision.SourceNames(), DeepEquals, []string{"local1", "snap1", "snap2"})
+
+	bytes, err := json.Marshal(revision)
+	c.Assert(err, IsNil)
+
+	json_expected := `{"Sources":[{"Component":"main","Name":"local1"},{"Component":"test1","Name":"snap1"},{"Component":"test2","Name":"snap2"}]}`
+	c.Assert(string(bytes), Equals, json_expected)
+
+	c.Assert(s.repo2.DropRevision(), DeepEquals, revision)
+	c.Assert(s.repo2.Revision, IsNil)
+}
+
 type PublishedRepoCollectionSuite struct {
 	PackageListMixinSuite
 	db                                database.Storage
@@ -450,13 +547,22 @@ type PublishedRepoCollectionSuite struct {
 var _ = Suite(&PublishedRepoCollectionSuite{})
 
 func (s *PublishedRepoCollectionSuite) SetUpTest(c *C) {
+	s.SetUpPackages()
+
 	s.db, _ = goleveldb.NewOpenDB(c.MkDir())
 	s.factory = NewCollectionFactory(s.db)
 
 	s.snapshotCollection = s.factory.SnapshotCollection()
 
-	s.snap1 = NewSnapshotFromPackageList("snap1", []*Snapshot{}, NewPackageList(), "desc1")
-	s.snap2 = NewSnapshotFromPackageList("snap2", []*Snapshot{}, NewPackageList(), "desc2")
+	snap1Refs := NewPackageRefList()
+	snap1Refs.Refs = [][]byte{s.p1.Key(""), s.p2.Key("")}
+	sort.Sort(snap1Refs)
+	s.snap1 = NewSnapshotFromRefList("snap1", []*Snapshot{}, snap1Refs, "desc1")
+
+	snap2Refs := NewPackageRefList()
+	snap2Refs.Refs = [][]byte{s.p3.Key("")}
+	sort.Sort(snap2Refs)
+	s.snap2 = NewSnapshotFromRefList("snap2", []*Snapshot{}, snap2Refs, "desc2")
 
 	s.snapshotCollection.Add(s.snap1)
 	s.snapshotCollection.Add(s.snap2)
@@ -464,11 +570,11 @@ func (s *PublishedRepoCollectionSuite) SetUpTest(c *C) {
 	s.localRepo = NewLocalRepo("local1", "comment1")
 	s.factory.LocalRepoCollection().Add(s.localRepo)
 
-	s.repo1, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory)
-	s.repo2, _ = NewPublishedRepo("", "", "anaconda", []string{}, []string{"main", "contrib"}, []interface{}{s.snap2, s.snap1}, s.factory)
-	s.repo3, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap2}, s.factory)
-	s.repo4, _ = NewPublishedRepo("", "ppa", "precise", []string{}, []string{"main"}, []interface{}{s.localRepo}, s.factory)
-	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "precise", []string{}, []string{"main"}, []interface{}{s.localRepo}, s.factory)
+	s.repo1, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory, false)
+	s.repo2, _ = NewPublishedRepo("", "", "anaconda", []string{}, []string{"main", "contrib"}, []interface{}{s.snap2, s.snap1}, s.factory, false)
+	s.repo3, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap2}, s.factory, false)
+	s.repo4, _ = NewPublishedRepo("", "ppa", "precise", []string{}, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
+	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "precise", []string{}, []string{"main"}, []interface{}{s.localRepo}, s.factory, false)
 
 	s.collection = s.factory.PublishedRepoCollection()
 }
@@ -534,7 +640,7 @@ func (s *PublishedRepoCollectionSuite) TestUpdateLoadComplete(c *C) {
 	c.Assert(r.sourceItems["main"].snapshot, IsNil)
 	c.Assert(s.collection.LoadComplete(r, s.factory), IsNil)
 	c.Assert(r.Sources["main"], Equals, s.repo1.sourceItems["main"].snapshot.UUID)
-	c.Assert(r.RefList("main").Len(), Equals, 0)
+	c.Assert(r.RefList("main").Len(), Equals, 2)
 
 	r, err = collection.ByStoragePrefixDistribution("", "ppa", "precise")
 	c.Assert(err, IsNil)
@@ -625,6 +731,51 @@ func (s *PublishedRepoCollectionSuite) TestByLocalRepo(c *C) {
 	c.Check(s.collection.ByLocalRepo(s.localRepo), DeepEquals, []*PublishedRepo{s.repo4, s.repo5})
 }
 
+func (s *PublishedRepoCollectionSuite) TestListReferencedFiles(c *C) {
+	c.Check(s.factory.PackageCollection().Update(s.p1), IsNil)
+	c.Check(s.factory.PackageCollection().Update(s.p2), IsNil)
+	c.Check(s.factory.PackageCollection().Update(s.p3), IsNil)
+
+	c.Check(s.collection.Add(s.repo1), IsNil)
+	c.Check(s.collection.Add(s.repo2), IsNil)
+	c.Check(s.collection.Add(s.repo4), IsNil)
+	c.Check(s.collection.Add(s.repo5), IsNil)
+
+	files, err := s.collection.listReferencedFilesByComponent(".", []string{"main", "contrib"}, s.factory, nil)
+	c.Assert(err, IsNil)
+	for _, v := range files {
+		sort.Strings(v)
+	}
+	c.Check(files, DeepEquals, map[string][]string{
+		"contrib": {
+			"a/alien-arena/alien-arena-common_7.40-2_i386.deb",
+			"a/alien-arena/mars-invaders_7.40-2_i386.deb",
+		},
+		"main": {"a/alien-arena/lonely-strangers_7.40-2_i386.deb"},
+	})
+
+	snap3 := NewSnapshotFromRefList("snap3", []*Snapshot{}, s.snap2.RefList(), "desc3")
+	s.snapshotCollection.Add(snap3)
+
+	// Ensure that adding a second publish point with matching files doesn't give duplicate results.
+	repo3, err := NewPublishedRepo("", "", "anaconda-2", []string{}, []string{"main"}, []interface{}{snap3}, s.factory, false)
+	c.Check(err, IsNil)
+	c.Check(s.collection.Add(repo3), IsNil)
+
+	files, err = s.collection.listReferencedFilesByComponent(".", []string{"main", "contrib"}, s.factory, nil)
+	c.Assert(err, IsNil)
+	for _, v := range files {
+		sort.Strings(v)
+	}
+	c.Check(files, DeepEquals, map[string][]string{
+		"contrib": {
+			"a/alien-arena/alien-arena-common_7.40-2_i386.deb",
+			"a/alien-arena/mars-invaders_7.40-2_i386.deb",
+		},
+		"main": {"a/alien-arena/lonely-strangers_7.40-2_i386.deb"},
+	})
+}
+
 type PublishedRepoRemoveSuite struct {
 	PackageListMixinSuite
 	db                                  database.Storage
@@ -650,11 +801,11 @@ func (s *PublishedRepoRemoveSuite) SetUpTest(c *C) {
 
 	s.snapshotCollection.Add(s.snap1)
 
-	s.repo1, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory)
-	s.repo2, _ = NewPublishedRepo("", "", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory)
-	s.repo3, _ = NewPublishedRepo("", "ppa", "meduza", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory)
-	s.repo4, _ = NewPublishedRepo("", "ppa", "osminog", []string{}, []string{"contrib"}, []interface{}{s.snap1}, s.factory)
-	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "osminog", []string{}, []string{"contrib"}, []interface{}{s.snap1}, s.factory)
+	s.repo1, _ = NewPublishedRepo("", "ppa", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory, false)
+	s.repo2, _ = NewPublishedRepo("", "", "anaconda", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory, false)
+	s.repo3, _ = NewPublishedRepo("", "ppa", "meduza", []string{}, []string{"main"}, []interface{}{s.snap1}, s.factory, false)
+	s.repo4, _ = NewPublishedRepo("", "ppa", "osminog", []string{}, []string{"contrib"}, []interface{}{s.snap1}, s.factory, false)
+	s.repo5, _ = NewPublishedRepo("files:other", "ppa", "osminog", []string{}, []string{"contrib"}, []interface{}{s.snap1}, s.factory, false)
 
 	s.collection = s.factory.PublishedRepoCollection()
 	s.collection.Add(s.repo1)

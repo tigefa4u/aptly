@@ -2,27 +2,25 @@ package azure
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
 
-	"github.com/Azure/azure-storage-blob-go/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/lease"
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/utils"
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 )
 
 // PublishedStorage abstract file system with published files (actually hosted on Azure)
 type PublishedStorage struct {
-	container azblob.ContainerURL
 	prefix    string
-	pathCache map[string]string
+	az        *azContext
+	pathCache map[string]map[string]string
 }
 
 // Check interface
@@ -30,60 +28,23 @@ var (
 	_ aptly.PublishedStorage = (*PublishedStorage)(nil)
 )
 
-func isEmulatorEndpoint(endpoint string) bool {
-	if h, _, err := net.SplitHostPort(endpoint); err == nil {
-		endpoint = h
-	}
-	if endpoint == "localhost" {
-		return true
-	}
-	// For IPv6, there could be case where SplitHostPort fails for cannot finding port.
-	// In this case, eliminate the '[' and ']' in the URL.
-	// For details about IPv6 URL, please refer to https://tools.ietf.org/html/rfc2732
-	if endpoint[0] == '[' && endpoint[len(endpoint)-1] == ']' {
-		endpoint = endpoint[1 : len(endpoint)-1]
-	}
-	return net.ParseIP(endpoint) != nil
-}
-
 // NewPublishedStorage creates published storage from Azure storage credentials
 func NewPublishedStorage(accountName, accountKey, container, prefix, endpoint string) (*PublishedStorage, error) {
-	credential, err := azblob.NewSharedKeyCredential(accountName, accountKey)
+	azctx, err := newAzContext(accountName, accountKey, container, prefix, endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	if endpoint == "" {
-		endpoint = "blob.core.windows.net"
-	}
-
-	var url *url.URL
-	if isEmulatorEndpoint(endpoint) {
-		url, err = url.Parse(fmt.Sprintf("http://%s/%s/%s", endpoint, accountName, container))
-	} else {
-		url, err = url.Parse(fmt.Sprintf("https://%s.%s/%s", accountName, endpoint, container))
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	containerURL := azblob.NewContainerURL(*url, azblob.NewPipeline(credential, azblob.PipelineOptions{}))
-
-	result := &PublishedStorage{
-		container: containerURL,
-		prefix:    prefix,
-	}
-
-	return result, nil
+	return &PublishedStorage{az: azctx}, nil
 }
 
 // String
 func (storage *PublishedStorage) String() string {
-	return fmt.Sprintf("Azure: %s/%s", storage.container, storage.prefix)
+	return storage.az.String()
 }
 
 // MkDir creates directory recursively under public path
-func (storage *PublishedStorage) MkDir(path string) error {
+func (storage *PublishedStorage) MkDir(_ string) error {
 	// no op for Azure
 	return nil
 }
@@ -106,7 +67,7 @@ func (storage *PublishedStorage) PutFile(path string, sourceFilename string) err
 	}
 	defer source.Close()
 
-	err = storage.putFile(path, source, sourceMD5)
+	err = storage.az.putFile(path, source, sourceMD5)
 	if err != nil {
 		err = errors.Wrap(err, fmt.Sprintf("error uploading %s to %s", sourceFilename, storage))
 	}
@@ -114,46 +75,17 @@ func (storage *PublishedStorage) PutFile(path string, sourceFilename string) err
 	return err
 }
 
-// putFile uploads file-like object to
-func (storage *PublishedStorage) putFile(path string, source io.Reader, sourceMD5 string) error {
-	path = filepath.Join(storage.prefix, path)
-
-	blob := storage.container.NewBlockBlobURL(path)
-
-	uploadOptions := azblob.UploadStreamToBlockBlobOptions{
-		BufferSize: 4 * 1024 * 1024,
-		MaxBuffers: 8,
-	}
-	if len(sourceMD5) > 0 {
-		decodedMD5, err := hex.DecodeString(sourceMD5)
-		if err != nil {
-			return err
-		}
-		uploadOptions.BlobHTTPHeaders = azblob.BlobHTTPHeaders{
-			ContentMD5: decodedMD5,
-		}
-	}
-
-	_, err := azblob.UploadStreamToBlockBlob(
-		context.Background(),
-		source,
-		blob,
-		uploadOptions,
-	)
-
-	return err
-}
-
 // RemoveDirs removes directory structure under public path
-func (storage *PublishedStorage) RemoveDirs(path string, progress aptly.Progress) error {
+func (storage *PublishedStorage) RemoveDirs(path string, _ aptly.Progress) error {
+	path = storage.az.blobPath(path)
 	filelist, err := storage.Filelist(path)
 	if err != nil {
 		return err
 	}
 
 	for _, filename := range filelist {
-		blob := storage.container.NewBlobURL(filepath.Join(storage.prefix, path, filename))
-		_, err := blob.Delete(context.Background(), azblob.DeleteSnapshotsOptionNone, azblob.BlobAccessConditions{})
+		blob := filepath.Join(path, filename)
+		_, err := storage.az.client.DeleteBlob(context.Background(), storage.az.container, blob, nil)
 		if err != nil {
 			return fmt.Errorf("error deleting path %s from %s: %s", filename, storage, err)
 		}
@@ -164,8 +96,8 @@ func (storage *PublishedStorage) RemoveDirs(path string, progress aptly.Progress
 
 // Remove removes single file under public path
 func (storage *PublishedStorage) Remove(path string) error {
-	blob := storage.container.NewBlobURL(filepath.Join(storage.prefix, path))
-	_, err := blob.Delete(context.Background(), azblob.DeleteSnapshotsOptionNone, azblob.BlobAccessConditions{})
+	path = storage.az.blobPath(path)
+	_, err := storage.az.client.DeleteBlob(context.Background(), storage.az.container, path, nil)
 	if err != nil {
 		err = errors.Wrap(err, fmt.Sprintf("error deleting %s from %s: %s", path, storage, err))
 	}
@@ -174,31 +106,38 @@ func (storage *PublishedStorage) Remove(path string) error {
 
 // LinkFromPool links package file from pool to dist's pool location
 //
-// publishedDirectory is desired location in pool (like prefix/pool/component/liba/libav/)
+// publishedPrefix is desired prefix for the location in the pool.
+// publishedRelPath is desired location in pool (like pool/component/liba/libav/)
 // sourcePool is instance of aptly.PackagePool
 // sourcePath is filepath to package file in package pool
 //
 // LinkFromPool returns relative path for the published file to be included in package index
-func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName string, sourcePool aptly.PackagePool,
+func (storage *PublishedStorage) LinkFromPool(publishedPrefix, publishedRelPath, fileName string, sourcePool aptly.PackagePool,
 	sourcePath string, sourceChecksums utils.ChecksumInfo, force bool) error {
 
-	relPath := filepath.Join(publishedDirectory, fileName)
-	poolPath := filepath.Join(storage.prefix, relPath)
+	relFilePath := filepath.Join(publishedRelPath, fileName)
+	prefixRelFilePath := filepath.Join(publishedPrefix, relFilePath)
+	poolPath := storage.az.blobPath(prefixRelFilePath)
 
 	if storage.pathCache == nil {
-		paths, md5s, err := storage.internalFilelist("")
+		storage.pathCache = make(map[string]map[string]string)
+	}
+	pathCache := storage.pathCache[publishedPrefix]
+	if pathCache == nil {
+		paths, md5s, err := storage.az.internalFilelist(publishedPrefix, nil)
 		if err != nil {
 			return fmt.Errorf("error caching paths under prefix: %s", err)
 		}
 
-		storage.pathCache = make(map[string]string, len(paths))
+		pathCache = make(map[string]string, len(paths))
 
 		for i := range paths {
-			storage.pathCache[paths[i]] = md5s[i]
+			pathCache[paths[i]] = md5s[i]
 		}
+		storage.pathCache[publishedPrefix] = pathCache
 	}
 
-	destinationMD5, exists := storage.pathCache[relPath]
+	destinationMD5, exists := pathCache[relFilePath]
 	sourceMD5 := sourceChecksums.MD5
 
 	if exists {
@@ -221,9 +160,9 @@ func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName strin
 	}
 	defer source.Close()
 
-	err = storage.putFile(relPath, source, sourceMD5)
+	err = storage.az.putFile(relFilePath, source, sourceMD5)
 	if err == nil {
-		storage.pathCache[relPath] = sourceMD5
+		pathCache[relFilePath] = sourceMD5
 	} else {
 		err = errors.Wrap(err, fmt.Sprintf("error uploading %s to %s: %s", sourcePath, storage, poolPath))
 	}
@@ -231,98 +170,65 @@ func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName strin
 	return err
 }
 
-func (storage *PublishedStorage) internalFilelist(prefix string) (paths []string, md5s []string, err error) {
-	const delimiter = "/"
-	paths = make([]string, 0, 1024)
-	md5s = make([]string, 0, 1024)
-	prefix = filepath.Join(storage.prefix, prefix)
-	if prefix != "" {
-		prefix += delimiter
-	}
-
-	for marker := (azblob.Marker{}); marker.NotDone(); {
-		listBlob, err := storage.container.ListBlobsFlatSegment(
-			context.Background(), marker, azblob.ListBlobsSegmentOptions{
-				Prefix:     prefix,
-				MaxResults: 1000,
-				Details:    azblob.BlobListingDetails{Metadata: true}})
-		if err != nil {
-			return nil, nil, fmt.Errorf("error listing under prefix %s in %s: %s", prefix, storage, err)
-		}
-
-		marker = listBlob.NextMarker
-
-		for _, blob := range listBlob.Segment.BlobItems {
-			if prefix == "" {
-				paths = append(paths, blob.Name)
-			} else {
-				paths = append(paths, blob.Name[len(prefix):])
-			}
-			md5s = append(md5s, fmt.Sprintf("%x", blob.Properties.ContentMD5))
-		}
-	}
-
-	return paths, md5s, nil
-}
-
 // Filelist returns list of files under prefix
 func (storage *PublishedStorage) Filelist(prefix string) ([]string, error) {
-	paths, _, err := storage.internalFilelist(prefix)
+	paths, _, err := storage.az.internalFilelist(prefix, nil)
 	return paths, err
 }
 
 // Internal copy or move implementation
-func (storage *PublishedStorage) internalCopyOrMoveBlob(src, dst string, metadata azblob.Metadata, move bool) error {
+func (storage *PublishedStorage) internalCopyOrMoveBlob(src, dst string, metadata map[string]*string, move bool) error {
 	const leaseDuration = 30
+	leaseID := uuid.NewString()
 
-	dstBlobURL := storage.container.NewBlobURL(filepath.Join(storage.prefix, dst))
-	srcBlobURL := storage.container.NewBlobURL(filepath.Join(storage.prefix, src))
-	leaseResp, err := srcBlobURL.AcquireLease(context.Background(), "", leaseDuration, azblob.ModifiedAccessConditions{})
-	if err != nil || leaseResp.StatusCode() != http.StatusCreated {
-		return fmt.Errorf("error acquiring lease on source blob %s", srcBlobURL)
+	serviceClient := storage.az.client.ServiceClient()
+	containerClient := serviceClient.NewContainerClient(storage.az.container)
+	srcBlobClient := containerClient.NewBlobClient(src)
+	blobLeaseClient, err := lease.NewBlobClient(srcBlobClient, &lease.BlobClientOptions{LeaseID: to.Ptr(leaseID)})
+	if err != nil {
+		return fmt.Errorf("error acquiring lease on source blob %s", src)
 	}
-	defer srcBlobURL.BreakLease(context.Background(), azblob.LeaseBreakNaturally, azblob.ModifiedAccessConditions{})
-	srcBlobLeaseID := leaseResp.LeaseID()
 
-	copyResp, err := dstBlobURL.StartCopyFromURL(
-		context.Background(),
-		srcBlobURL.URL(),
-		metadata,
-		azblob.ModifiedAccessConditions{},
-		azblob.BlobAccessConditions{},
-		azblob.DefaultAccessTier,
-		nil)
+	_, err = blobLeaseClient.AcquireLease(context.Background(), leaseDuration, nil)
+	if err != nil {
+		return fmt.Errorf("error acquiring lease on source blob %s", src)
+	}
+	defer blobLeaseClient.BreakLease(context.Background(), &lease.BlobBreakOptions{BreakPeriod: to.Ptr(int32(60))})
+
+	dstBlobClient := containerClient.NewBlobClient(dst)
+	copyResp, err := dstBlobClient.StartCopyFromURL(context.Background(), srcBlobClient.URL(), &blob.StartCopyFromURLOptions{
+		Metadata: metadata,
+	})
+
 	if err != nil {
 		return fmt.Errorf("error copying %s -> %s in %s: %s", src, dst, storage, err)
 	}
 
-	copyStatus := copyResp.CopyStatus()
+	copyStatus := *copyResp.CopyStatus
 	for {
-		if copyStatus == azblob.CopyStatusSuccess {
+		if copyStatus == blob.CopyStatusTypeSuccess {
 			if move {
-				_, err = srcBlobURL.Delete(
-					context.Background(),
-					azblob.DeleteSnapshotsOptionNone,
-					azblob.BlobAccessConditions{
-						LeaseAccessConditions: azblob.LeaseAccessConditions{LeaseID: srcBlobLeaseID},
-					})
+				_, err := storage.az.client.DeleteBlob(context.Background(), storage.az.container, src, &blob.DeleteOptions{
+					AccessConditions: &blob.AccessConditions{
+						LeaseAccessConditions: &blob.LeaseAccessConditions{
+							LeaseID: &leaseID,
+						},
+					},
+				})
 				return err
 			}
 			return nil
-		} else if copyStatus == azblob.CopyStatusPending {
+		} else if copyStatus == blob.CopyStatusTypePending {
 			time.Sleep(1 * time.Second)
-			blobPropsResp, err := dstBlobURL.GetProperties(
-				context.Background(),
-				azblob.BlobAccessConditions{LeaseAccessConditions: azblob.LeaseAccessConditions{LeaseID: srcBlobLeaseID}},
-				azblob.ClientProvidedKeyOptions{})
+			getMetadata, err := dstBlobClient.GetProperties(context.TODO(), nil)
 			if err != nil {
-				return fmt.Errorf("error getting destination blob properties %s", dstBlobURL)
+				return fmt.Errorf("error getting copy progress %s", dst)
 			}
-			copyStatus = blobPropsResp.CopyStatus()
+			copyStatus = *getMetadata.CopyStatus
 
-			_, err = srcBlobURL.RenewLease(context.Background(), srcBlobLeaseID, azblob.ModifiedAccessConditions{})
+			_, err = blobLeaseClient.RenewLease(context.Background(), nil)
 			if err != nil {
-				return fmt.Errorf("error renewing source blob lease %s", srcBlobURL)
+				return fmt.Errorf("error renewing source blob lease %s", src)
 			}
 		} else {
 			return fmt.Errorf("error copying %s -> %s in %s: %s", dst, src, storage, copyStatus)
@@ -337,7 +243,9 @@ func (storage *PublishedStorage) RenameFile(oldName, newName string) error {
 
 // SymLink creates a copy of src file and adds link information as meta data
 func (storage *PublishedStorage) SymLink(src string, dst string) error {
-	return storage.internalCopyOrMoveBlob(src, dst, azblob.Metadata{"SymLink": src}, false /* move */)
+	metadata := make(map[string]*string)
+	metadata["SymLink"] = &src
+	return storage.internalCopyOrMoveBlob(src, dst, metadata, false /* do not remove src */)
 }
 
 // HardLink using symlink functionality as hard links do not exist
@@ -347,29 +255,33 @@ func (storage *PublishedStorage) HardLink(src string, dst string) error {
 
 // FileExists returns true if path exists
 func (storage *PublishedStorage) FileExists(path string) (bool, error) {
-	blob := storage.container.NewBlobURL(filepath.Join(storage.prefix, path))
-	resp, err := blob.GetProperties(context.Background(), azblob.BlobAccessConditions{}, azblob.ClientProvidedKeyOptions{})
+	serviceClient := storage.az.client.ServiceClient()
+	containerClient := serviceClient.NewContainerClient(storage.az.container)
+	blobClient := containerClient.NewBlobClient(path)
+	_, err := blobClient.GetProperties(context.Background(), nil)
 	if err != nil {
-		storageError, ok := err.(azblob.StorageError)
-		if ok && string(storageError.ServiceCode()) == string(azblob.StorageErrorCodeBlobNotFound) {
+		if isBlobNotFound(err) {
 			return false, nil
 		}
-		return false, err
-	} else if resp.StatusCode() == http.StatusOK {
-		return true, nil
+		return false, fmt.Errorf("error checking if blob %s exists: %v", path, err)
 	}
-	return false, fmt.Errorf("error checking if blob %s exists %d", blob, resp.StatusCode())
+	return true, nil
 }
 
 // ReadLink returns the symbolic link pointed to by path.
 // This simply reads text file created with SymLink
 func (storage *PublishedStorage) ReadLink(path string) (string, error) {
-	blob := storage.container.NewBlobURL(filepath.Join(storage.prefix, path))
-	resp, err := blob.GetProperties(context.Background(), azblob.BlobAccessConditions{}, azblob.ClientProvidedKeyOptions{})
+	serviceClient := storage.az.client.ServiceClient()
+	containerClient := serviceClient.NewContainerClient(storage.az.container)
+	blobClient := containerClient.NewBlobClient(path)
+	props, err := blobClient.GetProperties(context.Background(), nil)
 	if err != nil {
-		return "", err
-	} else if resp.StatusCode() != http.StatusOK {
-		return "", fmt.Errorf("error checking if blob %s exists %d", blob, resp.StatusCode())
+		return "", fmt.Errorf("failed to get blob properties: %v", err)
 	}
-	return resp.NewMetadata()["SymLink"], nil
+
+	metadata := props.Metadata
+	if originalBlob, exists := metadata["original_blob"]; exists {
+		return *originalBlob, nil
+	}
+	return "", fmt.Errorf("error reading link %s: %v", path, err)
 }

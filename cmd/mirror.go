@@ -9,18 +9,18 @@ import (
 )
 
 func getVerifier(flags *flag.FlagSet) (pgp.Verifier, error) {
-	if LookupOption(context.Config().GpgDisableVerify, flags, "ignore-signatures") {
-		return nil, nil
-	}
-
 	keyRings := flags.Lookup("keyring").Value.Get().([]string)
+	ignoreSignatures := context.Config().GpgDisableVerify
+	if context.Flags().IsSet("ignore-signatures") {
+		ignoreSignatures = context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
+	}
 
 	verifier := context.GetVerifier()
 	for _, keyRing := range keyRings {
 		verifier.AddKeyring(keyRing)
 	}
 
-	err := verifier.InitKeyring()
+	err := verifier.InitKeyring(ignoreSignatures == false) // be verbose only if verifying signatures is requested
 	if err != nil {
 		return nil, err
 	}

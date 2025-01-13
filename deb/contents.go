@@ -7,7 +7,7 @@ import (
 	"io"
 
 	"github.com/aptly-dev/aptly/database"
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 )
 
 // ContentsIndex calculates mapping from files to packages, with sorting and aggregation
@@ -20,7 +20,7 @@ type ContentsIndex struct {
 func NewContentsIndex(db database.Storage) *ContentsIndex {
 	return &ContentsIndex{
 		db:     db,
-		prefix: []byte(uuid.New()),
+		prefix: []byte(uuid.NewString()),
 	}
 }
 
@@ -64,7 +64,7 @@ func (index *ContentsIndex) WriteTo(w io.Writer) (int64, error) {
 		currentPkgs [][]byte
 	)
 
-	err = index.db.ProcessByPrefix(index.prefix, func(key []byte, value []byte) error {
+	err = index.db.ProcessByPrefix(index.prefix, func(key []byte, _ []byte) error {
 		// cut prefix
 		key = key[prefixLen:]
 

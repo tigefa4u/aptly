@@ -11,7 +11,7 @@ import (
 
 	"github.com/aptly-dev/aptly/database"
 	"github.com/aptly-dev/aptly/utils"
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/ugorji/go/codec"
 )
 
@@ -50,7 +50,7 @@ func NewSnapshotFromRepository(name string, repo *RemoteRepo) (*Snapshot, error)
 	}
 
 	return &Snapshot{
-		UUID:                 uuid.New(),
+		UUID:                 uuid.NewString(),
 		Name:                 name,
 		CreatedAt:            time.Now(),
 		SourceKind:           SourceRemoteRepo,
@@ -66,7 +66,7 @@ func NewSnapshotFromRepository(name string, repo *RemoteRepo) (*Snapshot, error)
 // NewSnapshotFromLocalRepo creates snapshot from current state of local repository
 func NewSnapshotFromLocalRepo(name string, repo *LocalRepo) (*Snapshot, error) {
 	snap := &Snapshot{
-		UUID:        uuid.New(),
+		UUID:        uuid.NewString(),
 		Name:        name,
 		CreatedAt:   time.Now(),
 		SourceKind:  SourceLocalRepo,
@@ -95,7 +95,7 @@ func NewSnapshotFromRefList(name string, sources []*Snapshot, list *PackageRefLi
 	}
 
 	return &Snapshot{
-		UUID:        uuid.New(),
+		UUID:        uuid.NewString(),
 		Name:        name,
 		CreatedAt:   time.Now(),
 		SourceKind:  "snapshot",
@@ -259,7 +259,7 @@ func (collection *SnapshotCollection) search(filter func(*Snapshot) bool, unique
 		return result
 	}
 
-	collection.db.ProcessByPrefix([]byte("S"), func(key, blob []byte) error {
+	collection.db.ProcessByPrefix([]byte("S"), func(_, blob []byte) error {
 		s := &Snapshot{}
 		if err := s.Decode(blob); err != nil {
 			log.Printf("Error decoding snapshot: %s\n", err)
@@ -341,7 +341,7 @@ func (collection *SnapshotCollection) BySnapshotSource(snapshot *Snapshot) []*Sn
 
 // ForEach runs method for each snapshot
 func (collection *SnapshotCollection) ForEach(handler func(*Snapshot) error) error {
-	return collection.db.ProcessByPrefix([]byte("S"), func(key, blob []byte) error {
+	return collection.db.ProcessByPrefix([]byte("S"), func(_, blob []byte) error {
 		s := &Snapshot{}
 		if err := s.Decode(blob); err != nil {
 			log.Printf("Error decoding snapshot: %s\n", err)

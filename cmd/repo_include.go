@@ -29,7 +29,10 @@ func aptlyRepoInclude(cmd *commander.Command, args []string) error {
 
 	forceReplace := context.Flags().Lookup("force-replace").Value.Get().(bool)
 	acceptUnsigned := context.Flags().Lookup("accept-unsigned").Value.Get().(bool)
-	ignoreSignatures := context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
+	ignoreSignatures := context.Config().GpgDisableVerify
+	if context.Flags().IsSet("ignore-signatures") {
+		ignoreSignatures = context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
+	}
 	noRemoveFiles := context.Flags().Lookup("no-remove-files").Value.Get().(bool)
 	repoTemplateString := context.Flags().Lookup("repo").Value.Get().(string)
 	collectionFactory := context.NewCollectionFactory()
@@ -83,14 +86,14 @@ func aptlyRepoInclude(cmd *commander.Command, args []string) error {
 func makeCmdRepoInclude() *commander.Command {
 	cmd := &commander.Command{
 		Run:       aptlyRepoInclude,
-		UsageLine: "include <file.changes>|<directory> ...",
+		UsageLine: "include (<file.changes>|<directory>)...",
 		Short:     "add packages to local repositories based on .changes files",
 		Long: `
 Command include looks for .changes files in list of arguments or specified directories. Each
 .changes file is verified, parsed, referenced files are put into separate temporary directory
 and added into local repository. Successfully imported files are removed by default.
 
-Additionally uploads could be restricted with <uploaders.json> file. Rules in this file control
+Additionally uploads could be restricted with 'uploaders.json' file. Rules in this file control
 uploads based on GPG key ID of .changes file signature and queries on .changes file fields.
 
 Example:
