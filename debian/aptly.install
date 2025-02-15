@@ -1,0 +1,2 @@
+usr/bin/aptly
+completion.d/_aptly usr/share/zsh/vendor-completions

@@ -6,8 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
+	"github.com/aptly-dev/aptly/utils"
 	"github.com/gin-gonic/gin"
+	"github.com/saracen/walker"
 )
 
 func verifyPath(path string) bool {
@@ -31,20 +34,30 @@ func verifyDir(c *gin.Context) bool {
 	return true
 }
 
-// GET /files
+// @Summary List Directories
+// @Description **Get list of upload directories**
+// @Description
+// @Description **Example:**
+// @Description  ```
+// @Description  $ curl http://localhost:8080/api/files
+// @Description  ["aptly-0.9"]
+// @Description  ```
+// @Tags Files
+// @Produce json
+// @Success 200 {array} string "List of files"
+// @Router /api/files [get]
 func apiFilesListDirs(c *gin.Context) {
 	list := []string{}
+	listLock := &sync.Mutex{}
 
-	err := filepath.Walk(context.UploadPath(), func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
+	err := walker.Walk(context.UploadPath(), func(path string, info os.FileInfo) error {
 		if path == context.UploadPath() {
 			return nil
 		}
 
 		if info.IsDir() {
+			listLock.Lock()
+			defer listLock.Unlock()
 			list = append(list, filepath.Base(path))
 			return filepath.SkipDir
 		}
@@ -60,13 +73,33 @@ func apiFilesListDirs(c *gin.Context) {
 	c.JSON(200, list)
 }
 
-// POST /files/:dir/
+// @Summary Upload Files
+// @Description **Upload files to a directory**
+// @Description
+// @Description - one or more files can be uploaded
+// @Description - existing uploaded are overwritten
+// @Description
+// @Description **Example:**
+// @Description  ```
+// @Description $ curl -X POST -F file=@aptly_0.9~dev+217+ge5d646c_i386.deb http://localhost:8080/api/files/aptly-0.9
+// @Description ["aptly-0.9/aptly_0.9~dev+217+ge5d646c_i386.deb"]
+// @Description  ```
+// @Tags Files
+// @Accept multipart/form-data
+// @Param dir path string true "Directory to upload files to. Created if does not exist"
+// @Param files formData file true "Files to upload"
+// @Produce json
+// @Success 200 {array} string "list of uploaded files"
+// @Failure 400 {object} Error "Bad Request"
+// @Failure 404 {object} Error "Not Found"
+// @Failure 500 {object} Error "Internal Server Error"
+// @Router /api/files/{dir} [post]
 func apiFilesUpload(c *gin.Context) {
 	if !verifyDir(c) {
 		return
 	}
 
-	path := filepath.Join(context.UploadPath(), c.Params.ByName("dir"))
+	path := filepath.Join(context.UploadPath(), utils.SanitizePath(c.Params.ByName("dir")))
 	err := os.MkdirAll(path, 0777)
 
 	if err != nil {
@@ -111,19 +144,33 @@ func apiFilesUpload(c *gin.Context) {
 
 	apiFilesUploadedCounter.WithLabelValues(c.Params.ByName("dir")).Inc()
 	c.JSON(200, stored)
-
 }
 
-// GET /files/:dir
+// @Summary List Files
+// @Description **Show uploaded files in upload directory**
+// @Description
+// @Description **Example:**
+// @Description  ```
+// @Description $ curl http://localhost:8080/api/files/aptly-0.9
+// @Description ["aptly_0.9~dev+217+ge5d646c_i386.deb"]
+// @Description  ```
+// @Tags Files
+// @Produce json
+// @Param dir path string true "Directory to list"
+// @Success 200 {array} string "Files found in directory"
+// @Failure 404 {object} Error "Not Found"
+// @Failure 500 {object} Error "Internal Server Error"
+// @Router /api/files/{dir} [get]
 func apiFilesListFiles(c *gin.Context) {
 	if !verifyDir(c) {
 		return
 	}
 
 	list := []string{}
-	root := filepath.Join(context.UploadPath(), c.Params.ByName("dir"))
+	listLock := &sync.Mutex{}
+	root := filepath.Join(context.UploadPath(), utils.SanitizePath(c.Params.ByName("dir")))
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(root, func(path string, _ os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
@@ -132,6 +179,8 @@ func apiFilesListFiles(c *gin.Context) {
 			return nil
 		}
 
+		listLock.Lock()
+		defer listLock.Unlock()
 		list = append(list, filepath.Base(path))
 
 		return nil
@@ -149,13 +198,26 @@ func apiFilesListFiles(c *gin.Context) {
 	c.JSON(200, list)
 }
 
-// DELETE /files/:dir
+// @Summary Delete Directory
+// @Description **Delete upload directory and uploaded files within**
+// @Description
+// @Description **Example:**
+// @Description  ```
+// @Description $ curl -X DELETE http://localhost:8080/api/files/aptly-0.9
+// @Description {}
+// @Description  ```
+// @Tags Files
+// @Produce json
+// @Param dir path string true "Directory"
+// @Success 200 {object} string "msg"
+// @Failure 500 {object} Error "Internal Server Error"
+// @Router /api/files/{dir} [delete]
 func apiFilesDeleteDir(c *gin.Context) {
 	if !verifyDir(c) {
 		return
 	}
 
-	err := os.RemoveAll(filepath.Join(context.UploadPath(), c.Params.ByName("dir")))
+	err := os.RemoveAll(filepath.Join(context.UploadPath(), utils.SanitizePath(c.Params.ByName("dir"))))
 	if err != nil {
 		AbortWithJSONError(c, 500, err)
 		return
@@ -164,18 +226,35 @@ func apiFilesDeleteDir(c *gin.Context) {
 	c.JSON(200, gin.H{})
 }
 
-// DELETE /files/:dir/:name
+// @Summary Delete File
+// @Description **Delete a uploaded file in upload directory**
+// @Description
+// @Description **Example:**
+// @Description  ```
+// @Description $ curl -X DELETE http://localhost:8080/api/files/aptly-0.9/aptly_0.9~dev+217+ge5d646c_i386.deb
+// @Description {}
+// @Description  ```
+// @Tags Files
+// @Produce json
+// @Param dir path string true "Directory to delete from"
+// @Param name path string true "File to delete"
+// @Success 200 {object} string "msg"
+// @Failure 400 {object} Error "Bad Request"
+// @Failure 500 {object} Error "Internal Server Error"
+// @Router /api/files/{dir}/{name} [delete]
 func apiFilesDeleteFile(c *gin.Context) {
 	if !verifyDir(c) {
 		return
 	}
 
-	if !verifyPath(c.Params.ByName("name")) {
+	dir := utils.SanitizePath(c.Params.ByName("dir"))
+	name := utils.SanitizePath(c.Params.ByName("name"))
+	if !verifyPath(name) {
 		AbortWithJSONError(c, 400, fmt.Errorf("wrong file"))
 		return
 	}
 
-	err := os.Remove(filepath.Join(context.UploadPath(), c.Params.ByName("dir"), c.Params.ByName("name")))
+	err := os.Remove(filepath.Join(context.UploadPath(), dir, name))
 	if err != nil {
 		if err1, ok := err.(*os.PathError); !ok || !os.IsNotExist(err1.Err) {
 			AbortWithJSONError(c, 500, err)

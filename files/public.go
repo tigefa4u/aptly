@@ -5,11 +5,14 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/utils"
+	"github.com/saracen/walker"
 )
 
 // PublishedStorage abstract file system with public dirs (published repos)
@@ -118,37 +121,49 @@ func (storage *PublishedStorage) RemoveDirs(path string, progress aptly.Progress
 
 // LinkFromPool links package file from pool to dist's pool location
 //
-// publishedDirectory is desired location in pool (like prefix/pool/component/liba/libav/)
+// publishedPrefix is desired prefix for the location in the pool.
+// publishedRelPath is desired location in pool (like pool/component/liba/libav/)
 // sourcePool is instance of aptly.PackagePool
 // sourcePath is a relative path to package file in package pool
 //
 // LinkFromPool returns relative path for the published file to be included in package index
-func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName string, sourcePool aptly.PackagePool,
+func (storage *PublishedStorage) LinkFromPool(publishedPrefix, publishedRelPath, fileName string, sourcePool aptly.PackagePool,
 	sourcePath string, sourceChecksums utils.ChecksumInfo, force bool) error {
 
 	baseName := filepath.Base(fileName)
-	poolPath := filepath.Join(storage.rootPath, publishedDirectory, filepath.Dir(fileName))
+	poolPath := filepath.Join(storage.rootPath, publishedPrefix, publishedRelPath, filepath.Dir(fileName))
+
+	var localSourcePool aptly.LocalPackagePool
+	if storage.linkMethod != LinkMethodCopy {
+		pp, ok := sourcePool.(aptly.LocalPackagePool)
+		if !ok {
+			return fmt.Errorf("cannot link %s from non-local pool %s", baseName, sourcePool)
+		}
+
+		localSourcePool = pp
+	}
 
 	err := os.MkdirAll(poolPath, 0777)
 	if err != nil {
 		return err
 	}
 
-	var dstStat, srcStat os.FileInfo
+	var dstStat os.FileInfo
 
 	dstStat, err = os.Stat(filepath.Join(poolPath, baseName))
 	if err == nil {
 		// already exists, check source file
-		srcStat, err = sourcePool.Stat(sourcePath)
-		if err != nil {
-			// source file doesn't exist? problem!
-			return err
-		}
 
 		if storage.linkMethod == LinkMethodCopy {
+			srcSize, err := sourcePool.Size(sourcePath)
+			if err != nil {
+				// source file doesn't exist? problem!
+				return err
+			}
+
 			if storage.verifyMethod == VerificationMethodFileSize {
 				// if source and destination have the same size, no need to copy
-				if srcStat.Size() == dstStat.Size() {
+				if srcSize == dstStat.Size() {
 					return nil
 				}
 			} else {
@@ -165,6 +180,12 @@ func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName strin
 				}
 			}
 		} else {
+			srcStat, err := localSourcePool.Stat(sourcePath)
+			if err != nil {
+				// source file doesn't exist? problem!
+				return err
+			}
+
 			srcSys := srcStat.Sys().(*syscall.Stat_t)
 			dstSys := dstStat.Sys().(*syscall.Stat_t)
 
@@ -219,9 +240,9 @@ func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName strin
 
 		err = dst.Close()
 	} else if storage.linkMethod == LinkMethodSymLink {
-		err = sourcePool.(aptly.LocalPackagePool).Symlink(sourcePath, filepath.Join(poolPath, baseName))
+		err = localSourcePool.Symlink(sourcePath, filepath.Join(poolPath, baseName))
 	} else {
-		err = sourcePool.(aptly.LocalPackagePool).Link(sourcePath, filepath.Join(poolPath, baseName))
+		err = localSourcePool.Link(sourcePath, filepath.Join(poolPath, baseName))
 	}
 
 	return err
@@ -231,12 +252,12 @@ func (storage *PublishedStorage) LinkFromPool(publishedDirectory, fileName strin
 func (storage *PublishedStorage) Filelist(prefix string) ([]string, error) {
 	root := filepath.Join(storage.rootPath, prefix)
 	result := []string{}
+	resultLock := &sync.Mutex{}
 
-	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
+	err := walker.Walk(root, func(path string, info os.FileInfo) error {
 		if !info.IsDir() {
+			resultLock.Lock()
+			defer resultLock.Unlock()
 			result = append(result, path[len(root)+1:])
 		}
 		return nil
@@ -247,6 +268,7 @@ func (storage *PublishedStorage) Filelist(prefix string) ([]string, error) {
 		return []string{}, nil
 	}
 
+	sort.Strings(result)
 	return result, err
 }
 

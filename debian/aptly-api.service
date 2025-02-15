@@ -1,0 +1,16 @@
+[Unit]
+Description=Aptly REST API
+After=network.target
+Documentation=man:aptly(1)
+
+[Service]
+User=aptly-api
+Group=aptly-api
+Environment=TERM=dumb
+WorkingDirectory=~
+EnvironmentFile=/etc/default/aptly-api
+ExecStart=/usr/bin/aptly api serve -config=/etc/aptly.conf ${APTLY_OPTIONS} -listen=${LISTEN_ADDRESS}
+LimitNOFILE=32768
+
+[Install]
+WantedBy=multi-user.target

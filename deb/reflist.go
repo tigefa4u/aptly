@@ -71,7 +71,9 @@ func (l *PackageRefList) Encode() []byte {
 
 // Decode decodes msgpack representation into PackageRefLit
 func (l *PackageRefList) Decode(input []byte) error {
-	decoder := codec.NewDecoderBytes(input, &codec.MsgpackHandle{})
+	handle := &codec.MsgpackHandle{}
+	handle.ZeroCopy = true
+	decoder := codec.NewDecoderBytes(input, handle)
 	return decoder.Decode(l)
 }
 
@@ -194,31 +196,21 @@ func (l *PackageRefList) Diff(r *PackageRefList, packageCollection *PackageColle
 
 	// until we reached end of both lists
 	for il < ll || ir < lr {
-		// if we've exhausted left list, pull the rest from the right
-		if il == ll {
-			pr, err = packageCollection.ByKey(r.Refs[ir])
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, PackageDiff{Left: nil, Right: pr})
-			ir++
-			continue
+		var rl, rr []byte
+		if il < ll {
+			rl = l.Refs[il]
 		}
-		// if we've exhausted right list, pull the rest from the left
-		if ir == lr {
-			pl, err = packageCollection.ByKey(l.Refs[il])
-			if err != nil {
-				return nil, err
-			}
-			result = append(result, PackageDiff{Left: pl, Right: nil})
-			il++
-			continue
+		if ir < lr {
+			rr = r.Refs[ir]
 		}
 
-		// refs on both sides are present, load them
-		rl, rr := l.Refs[il], r.Refs[ir]
 		// compare refs
 		rel := bytes.Compare(rl, rr)
+		// an unset ref is less than all others, but since it represents the end
+		// of a reflist, it should be *greater*, so flip the comparison result
+		if rl == nil || rr == nil {
+			rel = -rel
+		}
 
 		if rel == 0 {
 			// refs are identical, so are packages, advance pointer
@@ -227,14 +219,14 @@ func (l *PackageRefList) Diff(r *PackageRefList, packageCollection *PackageColle
 			pl, pr = nil, nil
 		} else {
 			// load pl & pr if they haven't been loaded before
-			if pl == nil {
+			if pl == nil && rl != nil {
 				pl, err = packageCollection.ByKey(rl)
 				if err != nil {
 					return nil, err
 				}
 			}
 
-			if pr == nil {
+			if pr == nil && rr != nil {
 				pr, err = packageCollection.ByKey(rr)
 				if err != nil {
 					return nil, err
@@ -310,37 +302,40 @@ func (l *PackageRefList) Merge(r *PackageRefList, overrideMatching, ignoreConfli
 			overridenName = nil
 			overriddenArch = nil
 		} else {
-			partsL := bytes.Split(rl, []byte(" "))
-			archL, nameL, versionL := partsL[0][1:], partsL[1], partsL[2]
+			if !ignoreConflicting || overrideMatching {
+				partsL := bytes.Split(rl, []byte(" "))
+				archL, nameL, versionL := partsL[0][1:], partsL[1], partsL[2]
 
-			partsR := bytes.Split(rr, []byte(" "))
-			archR, nameR, versionR := partsR[0][1:], partsR[1], partsR[2]
+				partsR := bytes.Split(rr, []byte(" "))
+				archR, nameR, versionR := partsR[0][1:], partsR[1], partsR[2]
 
-			if !ignoreConflicting && bytes.Equal(archL, archR) && bytes.Equal(nameL, nameR) && bytes.Equal(versionL, versionR) {
-				// conflicting duplicates with same arch, name, version, but different file hash
-				result.Refs = append(result.Refs, r.Refs[ir])
-				il++
-				ir++
-				overridenName = nil
-				overriddenArch = nil
-				continue
-			}
-
-			if overrideMatching {
-				if bytes.Equal(archL, overriddenArch) && bytes.Equal(nameL, overridenName) {
-					// this package has already been overridden on the right
-					il++
-					continue
-				}
-
-				if bytes.Equal(archL, archR) && bytes.Equal(nameL, nameR) {
-					// override with package from the right
+				if !ignoreConflicting && bytes.Equal(archL, archR) &&
+					bytes.Equal(nameL, nameR) && bytes.Equal(versionL, versionR) {
+					// conflicting duplicates with same arch, name, version, but different file hash
 					result.Refs = append(result.Refs, r.Refs[ir])
 					il++
 					ir++
-					overriddenArch = archL
-					overridenName = nameL
+					overridenName = nil
+					overriddenArch = nil
 					continue
+				}
+
+				if overrideMatching {
+					if bytes.Equal(archL, overriddenArch) && bytes.Equal(nameL, overridenName) {
+						// this package has already been overridden on the right
+						il++
+						continue
+					}
+
+					if bytes.Equal(archL, archR) && bytes.Equal(nameL, nameR) {
+						// override with package from the right
+						result.Refs = append(result.Refs, r.Refs[ir])
+						il++
+						ir++
+						overriddenArch = archL
+						overridenName = nameL
+						continue
+					}
 				}
 			}
 

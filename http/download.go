@@ -46,29 +46,27 @@ func NewDownloader(downLimit int64, maxTries int, progress aptly.Progress) aptly
 	transport.RegisterProtocol("ftp", &protocol.FTPRoundTripper{})
 
 	downloader := &downloaderImpl{
-		progress: progress,
-		maxTries: maxTries,
+		progress:  progress,
+		maxTries:  maxTries,
+		aggWriter: io.Writer(progress),
 		client: &http.Client{
 			Transport: &transport,
 		},
 	}
 
-	progressWriter := io.Writer(progress)
 	if progress == nil {
-		progressWriter = io.Discard
+		downloader.aggWriter = io.Discard
+	}
+	if downLimit > 0 {
+		downloader.aggWriter = flowrate.NewWriter(downloader.aggWriter, downLimit)
 	}
 
 	downloader.client.CheckRedirect = downloader.checkRedirect
-	if downLimit > 0 {
-		downloader.aggWriter = flowrate.NewWriter(progressWriter, downLimit)
-	} else {
-		downloader.aggWriter = progressWriter
-	}
 
 	return downloader
 }
 
-func (downloader *downloaderImpl) checkRedirect(req *http.Request, via []*http.Request) error {
+func (downloader *downloaderImpl) checkRedirect(req *http.Request, _ []*http.Request) error {
 	if downloader.progress != nil {
 		downloader.progress.Printf("Following redirect to %s...\n", req.URL)
 	}
@@ -135,6 +133,8 @@ func retryableError(err error) bool {
 	}
 
 	switch err {
+	case context.Canceled:
+		return false
 	case io.EOF:
 		return true
 	case io.ErrUnexpectedEOF:
@@ -176,7 +176,7 @@ func (downloader *downloaderImpl) DownloadWithChecksum(ctx context.Context, url 
 	expected *utils.ChecksumInfo, ignoreMismatch bool) error {
 
 	if downloader.progress != nil {
-		downloader.progress.Printf("Downloading %s...\n", url)
+		downloader.progress.Printf("Downloading: %s\n", url)
 		defer downloader.progress.Flush()
 	}
 	req, err := downloader.newRequest(ctx, "GET", url)
@@ -192,7 +192,7 @@ func (downloader *downloaderImpl) DownloadWithChecksum(ctx context.Context, url 
 		if err != nil {
 			if retryableError(err) {
 				if downloader.progress != nil {
-					downloader.progress.Printf("Error downloading %s: %s retrying...\n", url, err)
+					downloader.progress.Printf("Error (retrying): %s\n", err)
 				}
 				maxTries--
 				time.Sleep(delay)
@@ -203,15 +203,12 @@ func (downloader *downloaderImpl) DownloadWithChecksum(ctx context.Context, url 
 				}
 			} else {
 				if downloader.progress != nil {
-					downloader.progress.Printf("Error downloading %s: %s cannot retry...\n", url, err)
+					downloader.progress.Printf("Error: %s \n", err)
 				}
 				break
 			}
 		} else {
 			// get out of the loop
-			if downloader.progress != nil {
-				downloader.progress.Printf("Success downloading %s\n", url)
-			}
 			break
 		}
 		if downloader.progress != nil {
@@ -222,7 +219,7 @@ func (downloader *downloaderImpl) DownloadWithChecksum(ctx context.Context, url 
 	// still an error after retrying, giving up
 	if err != nil {
 		if downloader.progress != nil {
-			downloader.progress.Printf("Giving up on %s...\n", url)
+			downloader.progress.Printf("Download Error: %s\n", url)
 		}
 		return err
 	}
@@ -263,11 +260,7 @@ func (downloader *downloaderImpl) download(req *http.Request, url, destination s
 	defer outfile.Close()
 
 	checksummer := utils.NewChecksumWriter()
-	writers := []io.Writer{outfile}
-
-	if downloader.progress != nil {
-		writers = append(writers, downloader.progress)
-	}
+	writers := []io.Writer{outfile, downloader.aggWriter}
 
 	if expected != nil {
 		writers = append(writers, checksummer)

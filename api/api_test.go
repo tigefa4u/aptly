@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +39,7 @@ func createTestConfig() *os.File {
 		return nil
 	}
 	jsonString, err := json.Marshal(gin.H{
-		"architectures": []string{},
+		"architectures":         []string{},
 		"enableMetricsEndpoint": true,
 	})
 	if err != nil {
@@ -47,10 +49,12 @@ func createTestConfig() *os.File {
 	return file
 }
 
-func (s *ApiSuite) SetUpSuite(c *C) {
+func (s *ApiSuite) setupContext() error {
 	aptly.Version = "testVersion"
 	file := createTestConfig()
-	c.Assert(file, NotNil)
+	if nil == file {
+		return fmt.Errorf("unable to create the test configuration file")
+	}
 	s.configFile = file
 
 	flags := flag.NewFlagSet("fakeFlags", flag.ContinueOnError)
@@ -61,10 +65,19 @@ func (s *ApiSuite) SetUpSuite(c *C) {
 	s.flags = flags
 
 	context, err := ctx.NewContext(s.flags)
-	c.Assert(err, IsNil)
+	if nil != err {
+		return err
+	}
 
 	s.context = context
 	s.router = Router(context)
+
+	return nil
+}
+
+func (s *ApiSuite) SetUpSuite(c *C) {
+	err := s.setupContext()
+	c.Assert(err, IsNil)
 }
 
 func (s *ApiSuite) TearDownSuite(c *C) {
@@ -97,7 +110,7 @@ func (s *ApiSuite) TestGetVersion(c *C) {
 	response, err := s.HTTPRequest("GET", "/api/version", nil)
 	c.Assert(err, IsNil)
 	c.Check(response.Code, Equals, 200)
-	c.Check(response.Body.String(), Matches, "{\"Version\":\"" + aptly.Version + "\"}")
+	c.Check(response.Body.String(), Matches, "{\"Version\":\""+aptly.Version+"\"}")
 }
 
 func (s *ApiSuite) TestGetReadiness(c *C) {
@@ -126,6 +139,15 @@ func (s *ApiSuite) TestGetMetrics(c *C) {
 	c.Check(b, Matches, ".*# TYPE aptly_api_http_request_duration_seconds summary.*")
 	c.Check(b, Matches, ".*# TYPE aptly_build_info gauge.*")
 	c.Check(b, Matches, ".*aptly_build_info.*version=\"testVersion\".*")
+}
+
+func (s *ApiSuite) TestRepoCreate(c *C) {
+	body, err := json.Marshal(gin.H{
+		"Name": "dummy",
+	})
+	c.Assert(err, IsNil)
+	_, err = s.HTTPRequest("POST", "/api/repos", bytes.NewReader(body))
+	c.Assert(err, IsNil)
 }
 
 func (s *ApiSuite) TestTruthy(c *C) {

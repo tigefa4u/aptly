@@ -8,24 +8,43 @@ import (
 	"strings"
 
 	"github.com/aptly-dev/aptly/pgp"
+	"github.com/aptly-dev/aptly/utils"
 	"github.com/gin-gonic/gin"
 )
 
-// POST /api/gpg
-func apiGPGAddKey(c *gin.Context) {
-	var b struct {
-		Keyserver   string
-		GpgKeyID    string
-		GpgKeyArmor string
-		Keyring     string
-	}
+type gpgAddKeyParams struct {
+	// Keyserver, when downloading GpgKeyIDs
+	Keyserver string `json:"Keyserver"       example:"hkp://keyserver.ubuntu.com:80"`
+	// GpgKeyIDs to download from Keyserver, comma separated list
+	GpgKeyID string `json:"GpgKeyID"        example:"EF0F382A1A7B6500,8B48AD6246925553"`
+	// Armored gpg public ket, instead of downloading from keyserver
+	GpgKeyArmor string `json:"GpgKeyArmor"     example:""`
+	// Keyring for adding the keys (default: trustedkeys.gpg)
+	Keyring string `json:"Keyring"         example:"trustedkeys.gpg"`
+}
 
+// @Summary Add GPG Keys
+// @Description **Adds GPG keys to aptly keyring**
+// @Description
+// @Description Add GPG public keys for veryfing remote repositories for mirroring.
+// @Tags Mirrors
+// @Produce json
+// @Success 200 {object} string "OK"
+// @Failure 400 {object} Error "Bad Request"
+// @Failure 404 {object} Error "Not Found"
+// @Router /api/gpg [post]
+func apiGPGAddKey(c *gin.Context) {
+	b := gpgAddKeyParams{}
 	if c.Bind(&b) != nil {
 		return
 	}
+	b.Keyserver = utils.SanitizePath(b.Keyserver)
+	b.GpgKeyID = utils.SanitizePath(b.GpgKeyID)
+	b.GpgKeyArmor = utils.SanitizePath(b.GpgKeyArmor)
+	// b.Keyring can be an absolute path
 
 	var err error
-	args := []string{"--no-default-keyring"}
+	args := []string{"--no-default-keyring", "--allow-non-selfsigned-uid"}
 	keyring := "trustedkeys.gpg"
 	if len(b.Keyring) > 0 {
 		keyring = b.Keyring
@@ -61,7 +80,7 @@ func apiGPGAddKey(c *gin.Context) {
 		args = append(args, keys...)
 	}
 
-	finder := pgp.GPG1Finder()
+	finder := pgp.GPGDefaultFinder()
 	gpg, _, err := finder.FindGPG()
 	if err != nil {
 		AbortWithJSONError(c, 400, err)
@@ -73,11 +92,11 @@ func apiGPGAddKey(c *gin.Context) {
 	// there is no error handling for such as gpg will do this for us
 	cmd := exec.Command(gpg, args...)
 	fmt.Printf("running %s %s\n", gpg, strings.Join(args, " "))
-	cmd.Stdout = os.Stdout
-	if err = cmd.Run(); err != nil {
-		AbortWithJSONError(c, 400, err)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		c.JSON(400, string(out))
 		return
 	}
 
-	c.JSON(200, gin.H{})
+	c.JSON(200, string(out))
 }

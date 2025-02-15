@@ -20,6 +20,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zlib
+
 from pathlib import Path
 from uuid import uuid4
 
@@ -102,7 +103,7 @@ class DotFinder(object):
     def find_dot(self, executables):
         for executable in executables:
             try:
-                subprocess.check_output([executable, "-V"], text=True)
+                subprocess.check_output([executable, "-V"], text=True, stderr=subprocess.DEVNULL)
                 return executable
             except Exception:
                 pass
@@ -127,30 +128,15 @@ class BaseTest(object):
     requiresGPG2 = False
     requiresDot = False
     sortOutput = False
+    debugOutput = False
+    EtcdServer = None
 
     aptlyDir = ".aptly"
     aptlyConfigFile = ".aptly.conf"
     expectedCode = 0
-    configFile = {
-        "rootDir": f"{os.environ['HOME']}/{aptlyDir}",
-        "downloadConcurrency": 4,
-        "downloadSpeedLimit": 0,
-        "downloadRetries": 5,
-        "databaseOpenAttempts": 10,
-        "architectures": [],
-        "dependencyFollowSuggests": False,
-        "dependencyFollowRecommends": False,
-        "dependencyFollowAllVariants": False,
-        "dependencyFollowSource": False,
-        "gpgDisableVerify": False,
-        "gpgDisableSign": False,
-        "ppaDistributorID": "ubuntu",
-        "ppaCodename": "",
-        "enableMetricsEndpoint": True,
-        "logLevel": "debug",
-        "logFormat": "default",
-        "serveInAPIMode": True
-    }
+    databaseType = ""
+    databaseUrl = ""
+
     configOverride = {}
     environmentOverride = {}
 
@@ -176,6 +162,10 @@ class BaseTest(object):
         try:
             self.run()
             self.check()
+        except Exception as exc:
+            if self.debugOutput:
+                print(f"API log:\n{self.debug_output()}")
+            raise exc
         finally:
             self.teardown()
 
@@ -189,7 +179,32 @@ class BaseTest(object):
                 os.environ["HOME"], ".gnupg", "aptlytest.gpg"))
 
     def prepare_default_config(self):
-        cfg = self.configFile.copy()
+        databaseBackend = {
+            "type": self.databaseType,
+            "url": self.databaseUrl,
+        }
+
+        cfg = {
+            "rootDir": f"{os.environ['HOME']}/{self.aptlyDir}",
+            "downloadConcurrency": 4,
+            "downloadSpeedLimit": 0,
+            "downloadRetries": 5,
+            "databaseOpenAttempts": 10,
+            "architectures": [],
+            "dependencyFollowSuggests": False,
+            "dependencyFollowRecommends": False,
+            "dependencyFollowAllVariants": False,
+            "dependencyFollowSource": False,
+            "gpgDisableVerify": False,
+            "gpgDisableSign": False,
+            "ppaDistributorID": "ubuntu",
+            "ppaCodename": "",
+            "enableMetricsEndpoint": True,
+            "logLevel": "debug",
+            "logFormat": "default",
+            "serveInAPIMode": True,
+            "databaseBackend": databaseBackend,
+        }
         if self.requiresGPG1:
             cfg["gpgProvider"] = "gpg1"
         elif self.requiresGPG2:
@@ -226,15 +241,33 @@ class BaseTest(object):
             shutil.copytree(self.fixturePoolDir, os.path.join(
                 os.environ["HOME"], self.aptlyDir, "pool"), ignore=shutil.ignore_patterns(".git"))
 
-        if self.fixtureDB:
-            shutil.copytree(self.fixtureDBDir, os.path.join(
-                os.environ["HOME"], self.aptlyDir, "db"))
+        if self.databaseType == "etcd":
+            if not os.path.exists("/tmp/aptly-etcd"):
+                self.run_cmd([os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "t13_etcd/install-etcd.sh")])
+
+        if self.fixtureDB and self.databaseType != "etcd":
+            shutil.copytree(self.fixtureDBDir, os.path.join(os.environ["HOME"], self.aptlyDir, "db"))
+
+        if self.databaseType == "etcd":
+            if self.EtcdServer:
+                self.shutdown_etcd()
+
+            # remove existing database
+            if os.path.exists("/tmp/aptly-etcd-data"):
+                shutil.rmtree("/tmp/aptly-etcd-data")
+
+            if self.fixtureDB:
+                print("import etcd")
+                self.run_cmd(["/tmp/aptly-etcd/etcdctl", "--data-dir=/tmp/aptly-etcd-data", "snapshot", "restore", os.path.join(os.environ["HOME"], "etcd.db")])
+
+            print("starting etcd")
+            self.EtcdServer = self._start_process([os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "t13_etcd/start-etcd.sh")], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
         if self.fixtureWebServer:
             self.webServerUrl = self.start_webserver(os.path.join(os.path.dirname(inspect.getsourcefile(self.__class__)),
                                                                   self.fixtureWebServer))
 
-        if self.requiresGPG2:
+        if self.requiresGPG2 or self.gpgFinder.gpg2:
             self.run_cmd([
                 self.gpgFinder.gpg2, "--import",
                 os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "files") + "/aptly.sec"], expected_code=None)
@@ -242,10 +275,14 @@ class BaseTest(object):
         if self.fixtureGpg:
             self.run_cmd([self.gpgFinder.gpg, "--no-default-keyring", "--trust-model", "always", "--batch", "--keyring", "aptlytest.gpg", "--import"] +
                          [os.path.join(os.path.dirname(inspect.getsourcefile(BaseTest)), "files", key) for key in self.fixtureGpgKeys])
+            self.run_cmd(["chmod", "400", os.path.join(os.environ["HOME"], ".gnupg/aptlytest.gpg")])
 
         if hasattr(self, "fixtureCmds"):
             for cmd in self.fixtureCmds:
-                self.run_cmd(cmd)
+                output = self.run_cmd(cmd)
+                print("fixture Output:\n")
+                for line in output.split("\n"):
+                    print(f"    {line}")
 
     def sort_lines(self, output):
         return "\n".join(sorted(self.ensure_utf8(output).split("\n")))
@@ -269,6 +306,7 @@ class BaseTest(object):
                 params['url'] = self.webServerUrl
 
             command = string.Template(command).substitute(params)
+            print(f"running command: {command}\n")
             command = shlex.split(command)
 
         if command[0] == "aptly":
@@ -281,41 +319,36 @@ class BaseTest(object):
         return subprocess.Popen(command, stderr=stderr, stdout=stdout, env=environ)
 
     def run_cmd(self, command, expected_code=0):
-        try:
-            proc = self._start_process(command, stdout=subprocess.PIPE)
-            raw_output, _ = proc.communicate()
+        proc = self._start_process(command, stdout=subprocess.PIPE)
+        raw_output, _ = proc.communicate()
 
-            returncodes = [proc.returncode]
-            is_aptly_command = False
-            if isinstance(command, str):
-                is_aptly_command = command.startswith("aptly")
+        raw_output = raw_output.decode("utf-8", errors='replace')
 
-            if isinstance(command, list):
-                is_aptly_command = command[0] == "aptly"
+        returncodes = [proc.returncode]
+        is_aptly_command = False
+        if isinstance(command, str):
+            is_aptly_command = command.startswith("aptly")
 
-            if is_aptly_command:
-                # remove the last two rows as go tests always print PASS/FAIL and coverage in those
-                # two lines. This would otherwise fail the tests as they would not match gold
-                matches = re.findall(r"((.|\n)*)EXIT: (\d)\n.*\ncoverage: .*", raw_output.decode("utf-8"))
-                if not matches:
-                    raise Exception("no matches found in output '%s'" % raw_output.decode("utf-8"))
+        if isinstance(command, list):
+            is_aptly_command = command[0] == "aptly"
 
-                output, _, returncode = matches[0]
+        if is_aptly_command:
+            # remove the last two rows as go tests always print PASS/FAIL and coverage in those
+            # two lines. This would otherwise fail the tests as they would not match gold
+            matches = re.findall(r"((.|\n)*)EXIT: (\d)\n.*\ncoverage: .*", raw_output)
+            if not matches:
+                raise Exception("no matches found in command output '%s'" % raw_output)
 
-                output = output.encode()
-                returncodes.append(int(returncode))
+            output, _, returncode = matches[0]
+            returncodes.append(int(returncode))
+        else:
+            output = raw_output
 
-            else:
-                output = raw_output
-
-            if expected_code is not None:
-                if expected_code not in returncodes:
-                    raise Exception("exit code %d != %d (output: %s)" % (
-                        proc.returncode, expected_code, raw_output))
-            return output
-        except Exception as e:
-            raise Exception("Running command '%s' failed: %s" %
-                            (command, str(e)))
+        if expected_code is not None:
+            if expected_code not in returncodes:
+                raise Exception("command expected to return %d, but returned %d: \n%s" % (
+                    expected_code, proc.returncode, raw_output))
+        return output
 
     def gold_processor(self, gold):
         return gold
@@ -342,10 +375,12 @@ class BaseTest(object):
         return s
 
     def check_output(self):
+        gold_file = self.get_gold_filename()
+        print(f"Verifying gold file: {gold_file}")
         try:
             self.verify_match(self.get_gold(), self.output,
                               match_prepare=self.outputMatchPrepare)
-        except:  # noqa: E722
+        except Exception:  # noqa: E722
             if self.captureResults:
                 if self.outputMatchPrepare is not None:
                     self.output = self.outputMatchPrepare(self.output)
@@ -366,6 +401,15 @@ class BaseTest(object):
                     f.write(output)
             else:
                 raise
+
+    def write_file(self, path, content):
+        full_path = os.path.join(os.environ["HOME"], ".aptly", path)
+
+        if not os.path.exists(os.path.dirname(full_path)):
+            os.makedirs(os.path.dirname(full_path), 0o755)
+
+        with open(full_path, "w") as f:
+            f.write(content)
 
     def read_file(self, path, mode=''):
         with open(os.path.join(os.environ["HOME"], self.aptlyDir, path), "r" + mode) as f:
@@ -427,11 +471,11 @@ class BaseTest(object):
 
     def check_in(self, item, l):
         if item not in l:
-            raise Exception("item %r not in %r", item, l)
+            raise Exception("expected item: %r\nnot found in: %r" % (item, l))
 
     def check_not_in(self, item, l):
         if item in l:
-            raise Exception("item %r in %r", item, l)
+            raise Exception("unexpected item: %r\n found in: %r" % (item, l))
 
     def check_subset(self, a, b):
         diff = ''
@@ -442,7 +486,7 @@ class BaseTest(object):
                 diff += "wrong value '%s' for key '%s', expected '%s'\n" % (
                     v, k, b[k])
         if diff:
-            raise Exception("content doesn't match:\n" + diff)
+            raise Exception("content subset doesn't match:\n" + diff)
 
     def ensure_utf8(self, a):
         if isinstance(a, bytes):
@@ -476,7 +520,8 @@ class BaseTest(object):
         self.prepare_fixture()
 
     def teardown(self):
-        pass
+        if self.EtcdServer:
+            self.shutdown_etcd()
 
     def start_webserver(self, directory):
         FileHTTPServerRequestHandler.rootPath = directory
@@ -492,9 +537,17 @@ class BaseTest(object):
     def shutdown(self):
         if hasattr(self, 'webserver'):
             self.shutdown_webserver()
+        if self.EtcdServer:
+            self.shutdown_etcd()
 
     def shutdown_webserver(self):
         self.webserver.shutdown()
+
+    def shutdown_etcd(self):
+        print("stopping etcd")
+        self.EtcdServer.terminate()
+        self.EtcdServer.wait()
+        self.EtcdServer = None
 
     @classmethod
     def shutdown_class(cls):

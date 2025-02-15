@@ -21,7 +21,7 @@ import (
 type NullVerifier struct {
 }
 
-func (n *NullVerifier) InitKeyring() error {
+func (n *NullVerifier) InitKeyring(_ bool) error {
 	return nil
 }
 
@@ -61,9 +61,11 @@ func (s *PackageListMixinSuite) SetUpPackages() {
 	s.p1 = NewPackageFromControlFile(packageStanza.Copy())
 	stanza := packageStanza.Copy()
 	stanza["Package"] = "mars-invaders"
+	stanza["Filename"] = "pool/contrib/m/mars-invaders/mars-invaders_7.40-2_i386.deb"
 	s.p2 = NewPackageFromControlFile(stanza)
 	stanza = packageStanza.Copy()
 	stanza["Package"] = "lonely-strangers"
+	stanza["Filename"] = "pool/contrib/l/lonely-strangers/lonely-strangers_7.40-2_i386.deb"
 	s.p3 = NewPackageFromControlFile(stanza)
 
 	s.list.Add(s.p1)
@@ -113,7 +115,6 @@ func (s *RemoteRepoSuite) TestInvalidURL(c *C) {
 func (s *RemoteRepoSuite) TestFlatCreation(c *C) {
 	c.Check(s.flat.IsFlat(), Equals, true)
 	c.Check(s.flat.Distribution, Equals, "./")
-	c.Check(s.flat.Architectures, IsNil)
 	c.Check(s.flat.Components, IsNil)
 
 	flat2, _ := NewRemoteRepo("flat2", "http://pkg.jenkins-ci.org/debian-stable", "binary/", []string{}, []string{}, false, false, false)
@@ -195,7 +196,7 @@ func (s *RemoteRepoSuite) TestPackageURL(c *C) {
 }
 
 func (s *RemoteRepoSuite) TestFetch(c *C) {
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 	c.Assert(s.repo.Architectures, DeepEquals, []string{"amd64", "armel", "armhf", "i386", "powerpc"})
 	c.Assert(s.repo.Components, DeepEquals, []string{"main"})
@@ -216,7 +217,7 @@ func (s *RemoteRepoSuite) TestFetchNullVerifier1(c *C) {
 	downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
 	downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release.gpg", "GPG")
 
-	err := s.repo.Fetch(downloader, &NullVerifier{})
+	err := s.repo.Fetch(downloader, &NullVerifier{}, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.repo.Architectures, DeepEquals, []string{"amd64", "armel", "armhf", "i386", "powerpc"})
 	c.Assert(s.repo.Components, DeepEquals, []string{"main"})
@@ -227,7 +228,7 @@ func (s *RemoteRepoSuite) TestFetchNullVerifier2(c *C) {
 	downloader := http.NewFakeDownloader()
 	downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/InRelease", exampleReleaseFile)
 
-	err := s.repo.Fetch(downloader, &NullVerifier{})
+	err := s.repo.Fetch(downloader, &NullVerifier{}, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.repo.Architectures, DeepEquals, []string{"amd64", "armel", "armhf", "i386", "powerpc"})
 	c.Assert(s.repo.Components, DeepEquals, []string{"main"})
@@ -236,13 +237,13 @@ func (s *RemoteRepoSuite) TestFetchNullVerifier2(c *C) {
 
 func (s *RemoteRepoSuite) TestFetchWrongArchitecture(c *C) {
 	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{"xyz"}, false, false, false)
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, ErrorMatches, "architecture xyz not available in repo.*")
 }
 
 func (s *RemoteRepoSuite) TestFetchWrongComponent(c *C) {
 	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"xyz"}, []string{"i386"}, false, false, false)
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, ErrorMatches, "component xyz not available in repo.*")
 }
 
@@ -269,14 +270,14 @@ func (s *RemoteRepoSuite) TestRefKey(c *C) {
 func (s *RemoteRepoSuite) TestDownload(c *C) {
 	s.repo.Architectures = []string{"i386"}
 
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages", examplePackagesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -296,14 +297,14 @@ func (s *RemoteRepoSuite) TestDownload(c *C) {
 
 	// Next call must return an empty download list with option "skip-existing-packages"
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
-	err = s.repo.Fetch(s.downloader, nil)
+	err = s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages", examplePackagesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -317,14 +318,14 @@ func (s *RemoteRepoSuite) TestDownload(c *C) {
 
 	// Next call must return the download list without option "skip-existing-packages"
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
-	err = s.repo.Fetch(s.downloader, nil)
+	err = s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages", examplePackagesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -342,7 +343,7 @@ func (s *RemoteRepoSuite) TestDownloadWithInstaller(c *C) {
 	s.repo.Architectures = []string{"i386"}
 	s.repo.DownloadInstaller = true
 
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
@@ -351,7 +352,7 @@ func (s *RemoteRepoSuite) TestDownloadWithInstaller(c *C) {
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/installer-i386/current/images/SHA256SUMS", exampleInstallerHashSumFile)
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/installer-i386/current/images/MANIFEST", exampleInstallerManifestFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -385,7 +386,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	s.repo.Architectures = []string{"i386"}
 	s.repo.DownloadSources = true
 
-	err := s.repo.Fetch(s.downloader, nil)
+	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
@@ -395,7 +396,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources", exampleSourcesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -429,7 +430,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	// Next call must return an empty download list with option "skip-existing-packages"
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
 
-	err = s.repo.Fetch(s.downloader, nil)
+	err = s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
@@ -439,7 +440,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources", exampleSourcesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -454,7 +455,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	// Next call must return the download list without option "skip-existing-packages"
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
 
-	err = s.repo.Fetch(s.downloader, nil)
+	err = s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, IsNil)
 
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/binary-i386/Packages.bz2", &http.Error{Code: 404})
@@ -464,7 +465,7 @@ func (s *RemoteRepoSuite) TestDownloadWithSources(c *C) {
 	s.downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources.gz", &http.Error{Code: 404})
 	s.downloader.ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/source/Sources", exampleSourcesFile)
 
-	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, false)
+	err = s.repo.DownloadPackageIndexes(s.progress, s.downloader, nil, s.collectionFactory, true, false)
 	c.Assert(err, IsNil)
 	c.Assert(s.downloader.Empty(), Equals, true)
 
@@ -485,10 +486,10 @@ func (s *RemoteRepoSuite) TestDownloadFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Packages.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Packages", examplePackagesFile)
 
-	err := s.flat.Fetch(downloader, nil)
+	err := s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 
@@ -513,10 +514,10 @@ func (s *RemoteRepoSuite) TestDownloadFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Packages.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Packages", examplePackagesFile)
 
-	err = s.flat.Fetch(downloader, nil)
+	err = s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 
@@ -535,10 +536,10 @@ func (s *RemoteRepoSuite) TestDownloadFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Packages.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Packages", examplePackagesFile)
 
-	err = s.flat.Fetch(downloader, nil)
+	err = s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 
@@ -566,10 +567,10 @@ func (s *RemoteRepoSuite) TestDownloadWithSourcesFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Sources.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Sources", exampleSourcesFile)
 
-	err := s.flat.Fetch(downloader, nil)
+	err := s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 
@@ -612,10 +613,10 @@ func (s *RemoteRepoSuite) TestDownloadWithSourcesFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Sources.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Sources", exampleSourcesFile)
 
-	err = s.flat.Fetch(downloader, nil)
+	err = s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 
@@ -638,10 +639,10 @@ func (s *RemoteRepoSuite) TestDownloadWithSourcesFlat(c *C) {
 	downloader.ExpectError("http://repos.express42.com/virool/precise/Sources.xz", &http.Error{Code: 404})
 	downloader.ExpectResponse("http://repos.express42.com/virool/precise/Sources", exampleSourcesFile)
 
-	err = s.flat.Fetch(downloader, nil)
+	err = s.flat.Fetch(downloader, nil, true)
 	c.Assert(err, IsNil)
 
-	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true)
+	err = s.flat.DownloadPackageIndexes(s.progress, downloader, nil, s.collectionFactory, true, true)
 	c.Assert(err, IsNil)
 	c.Assert(downloader.Empty(), Equals, true)
 

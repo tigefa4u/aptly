@@ -25,7 +25,7 @@ func aptlyPublishList(cmd *commander.Command, args []string) error {
 	return aptlyPublishListTxt(cmd, args)
 }
 
-func aptlyPublishListTxt(cmd *commander.Command, args []string) error {
+func aptlyPublishListTxt(cmd *commander.Command, _ []string) error {
 	var err error
 
 	raw := cmd.Flag.Lookup("raw").Value.Get().(bool)
@@ -34,7 +34,7 @@ func aptlyPublishListTxt(cmd *commander.Command, args []string) error {
 	published := make([]string, 0, collectionFactory.PublishedRepoCollection().Len())
 
 	err = collectionFactory.PublishedRepoCollection().ForEach(func(repo *deb.PublishedRepo) error {
-		e := collectionFactory.PublishedRepoCollection().LoadComplete(repo, collectionFactory)
+		e := collectionFactory.PublishedRepoCollection().LoadShallow(repo, collectionFactory)
 		if e != nil {
 			fmt.Fprintf(os.Stderr, "Error found on one publish (prefix:%s / distribution:%s / component:%s\n)",
 				repo.StoragePrefix(), repo.Distribution, repo.Components())
@@ -77,7 +77,7 @@ func aptlyPublishListTxt(cmd *commander.Command, args []string) error {
 	return err
 }
 
-func aptlyPublishListJSON(cmd *commander.Command, args []string) error {
+func aptlyPublishListJSON(_ *commander.Command, _ []string) error {
 	var err error
 
 	repos := make([]*deb.PublishedRepo, 0, context.NewCollectionFactory().PublishedRepoCollection().Len())

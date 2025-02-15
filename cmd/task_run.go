@@ -62,11 +62,10 @@ func aptlyTaskRun(cmd *commander.Command, args []string) error {
 			text, _ = reader.ReadString('\n')
 			if text == "\n" {
 				break
-			} else {
-				text = strings.TrimSpace(text) + ","
-				parsedArgs, _ := shellwords.Parse(text)
-				cmdArgs = append(cmdArgs, parsedArgs...)
 			}
+			text = strings.TrimSpace(text) + ","
+			parsedArgs, _ := shellwords.Parse(text)
+			cmdArgs = append(cmdArgs, parsedArgs...)
 		}
 
 		if len(cmdArgs) == 0 {
@@ -132,7 +131,7 @@ func formatCommands(args []string) [][]string {
 func makeCmdTaskRun() *commander.Command {
 	cmd := &commander.Command{
 		Run:       aptlyTaskRun,
-		UsageLine: "run -filename=<filename> | <command1>, <command2>, ...",
+		UsageLine: "run (-filename=<filename> | <commands>...)",
 		Short:     "run aptly tasks",
 		Long: `
 Command helps organise multiple aptly commands in one single aptly task, running as single thread.

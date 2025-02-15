@@ -13,12 +13,10 @@ import (
 
 	"github.com/pkg/errors"
 
-	// TODO: replace crypto/openpgp since it is deprecated
-	// https://github.com/golang/go/issues/44226
-	"golang.org/x/crypto/openpgp"                       //nolint:staticcheck
-	"golang.org/x/crypto/openpgp/clearsign"             //nolint:staticcheck
-	openpgp_errors "golang.org/x/crypto/openpgp/errors" //nolint:staticcheck
-	"golang.org/x/crypto/openpgp/packet"                //nolint:staticcheck
+	"github.com/ProtonMail/go-crypto/openpgp"
+	"github.com/ProtonMail/go-crypto/openpgp/clearsign"
+	openpgp_errors "github.com/ProtonMail/go-crypto/openpgp/errors"
+	"github.com/ProtonMail/go-crypto/openpgp/packet"
 	"golang.org/x/term"
 )
 
@@ -46,7 +44,8 @@ type GoSigner struct {
 	signerConfig  *packet.Config
 }
 
-// SetBatch controls whether we allowed to interact with user
+// SetBatch controls whether we allowed to interact with user, for example
+// for getting the passphrase from stdin.
 func (g *GoSigner) SetBatch(batch bool) {
 	g.batch = batch
 }
@@ -284,7 +283,7 @@ type GoVerifier struct {
 }
 
 // InitKeyring verifies that gpg is installed and some keys are trusted
-func (g *GoVerifier) InitKeyring() error {
+func (g *GoVerifier) InitKeyring(verbose bool) error {
 	var err error
 
 	if len(g.keyRingFiles) == 0 {
@@ -305,7 +304,7 @@ func (g *GoVerifier) InitKeyring() error {
 		}
 	}
 
-	if len(g.trustedKeyring) == 0 {
+	if len(g.trustedKeyring) == 0 && verbose {
 		fmt.Printf("\nLooks like your keyring with trusted keys is empty. You might consider importing some keys.\n")
 		if len(g.keyRingFiles) == 0 {
 			// using default keyring

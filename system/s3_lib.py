@@ -5,10 +5,11 @@ import os
 try:
     import boto
 
-    if 'AWS_SECRET_ACCESS_KEY' in os.environ and 'AWS_ACCESS_KEY_ID' in os.environ:
+    if 'AWS_SECRET_ACCESS_KEY' in os.environ and 'AWS_ACCESS_KEY_ID' in os.environ and \
+       os.environ['AWS_SECRET_ACCESS_KEY'] != "" and os.environ['AWS_ACCESS_KEY_ID'] != "":
         s3_conn = boto.connect_s3()
     else:
-        print("S3 tests disabled: AWS creds not found in the environment")
+        print("S3 tests disabled: AWS creds not found in the environment (AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)")
         s3_conn = None
 except ImportError as e:
     print("S3 tests disabled: can't import boto", e)
@@ -32,6 +33,8 @@ class S3Test(BaseTest):
             "test1": {
                 "region": "us-east-1",
                 "bucket": self.bucket_name,
+                "awsAccessKeyID": os.environ["AWS_ACCESS_KEY_ID"],
+                "awsSecretAccessKey": os.environ["AWS_SECRET_ACCESS_KEY"]
             }
         }}
 
@@ -76,7 +79,10 @@ class S3Test(BaseTest):
         if self.check_path(path):
             raise Exception("path %s exists" % (path, ))
 
-    def read_file(self, path):
+    def read_file(self, path, mode=''):
+        # We don't support reading as binary here.
+        assert not mode
+
         if path.startswith("public/"):
             path = path[7:]
 

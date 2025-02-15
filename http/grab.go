@@ -59,14 +59,13 @@ func (d *GrabDownloader) DownloadWithChecksum(ctx context.Context, url string, d
 			// Success
 			break
 		}
-		d.log("Error downloading %s: %v\n", url, err)
 		if retryableError(err) {
 			maxTries--
-			d.log("Retrying download %s: %d\n", url, maxTries)
+			d.log("Retrying %d %s\n", maxTries, url)
 			time.Sleep(delay)
 		} else {
 			// Can't retry
-			d.log("Cannot retry download %s\n", url)
+			d.log("Error (retrying): HTTP code %s while fetching %s\n", err, url)
 			break
 		}
 	}
@@ -114,9 +113,8 @@ func (d *GrabDownloader) maybeSetupChecksum(req *grab.Request, expected *utils.C
 	return nil
 }
 
-func (d *GrabDownloader) download(ctx context.Context, url string, destination string, expected *utils.ChecksumInfo, ignoreMismatch bool) error {
-	// TODO clean up dest dir on permanent failure
-	d.log("Download %s -> %s\n", url, destination)
+func (d *GrabDownloader) download(_ context.Context, url string, destination string, expected *utils.ChecksumInfo, ignoreMismatch bool) error {
+	d.log("Downloading: %s\n", url)
 
 	req, err := grab.NewRequest(destination, url)
 	if err != nil {
@@ -155,7 +153,7 @@ func (d *GrabDownloader) GetProgress() aptly.Progress {
 	return d.progress
 }
 
-func (d *GrabDownloader) GetLength(ctx context.Context, url string) (int64, error) {
+func (d *GrabDownloader) GetLength(_ context.Context, url string) (int64, error) {
 	resp, err := http.Head(url)
 	if err != nil {
 		return -1, err

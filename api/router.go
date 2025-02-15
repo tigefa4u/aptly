@@ -11,6 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/rs/zerolog/log"
+
+	"github.com/aptly-dev/aptly/docs"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
 )
 
 var context *ctx.AptlyContext
@@ -20,6 +24,22 @@ func apiMetricsGet() gin.HandlerFunc {
 		countPackagesByRepos()
 		promhttp.Handler().ServeHTTP(c.Writer, c.Request)
 	}
+}
+
+func redirectSwagger(c *gin.Context) {
+	if c.Request.URL.Path == "/docs/index.html" {
+		c.Redirect(http.StatusMovedPermanently, "/docs.html")
+		return
+	}
+	if c.Request.URL.Path == "/docs/" {
+		c.Redirect(http.StatusMovedPermanently, "/docs.html")
+		return
+	}
+	if c.Request.URL.Path == "/docs" {
+		c.Redirect(http.StatusMovedPermanently, "/docs.html")
+		return
+	}
+	c.Next()
 }
 
 // Router returns prebuilt with routes http.Handler
@@ -47,6 +67,15 @@ func Router(c *ctx.AptlyContext) http.Handler {
 	}
 
 	router.Use(gin.Recovery(), gin.ErrorLogger())
+
+	if c.Config().EnableSwaggerEndpoint {
+		router.GET("docs.html", func(c *gin.Context) {
+			c.Data(http.StatusOK, "text/html; charset=utf-8", docs.DocsHTML)
+		})
+		router.Use(redirectSwagger)
+		url := ginSwagger.URL("/docs/doc.json")
+		router.GET("/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler, url))
+	}
 
 	if c.Config().EnableMetricsEndpoint {
 		MetricsCollectorRegistrar.Register(router)
@@ -95,6 +124,7 @@ func Router(c *ctx.AptlyContext) http.Handler {
 			api.GET("/metrics", apiMetricsGet())
 		}
 		api.GET("/version", apiVersion)
+		api.GET("/storage", apiDiskFree)
 
 		isReady := &atomic.Value{}
 		isReady.Store(false)
@@ -116,6 +146,7 @@ func Router(c *ctx.AptlyContext) http.Handler {
 
 		api.POST("/repos/:name/file/:dir/:file", apiReposPackageFromFile)
 		api.POST("/repos/:name/file/:dir", apiReposPackageFromDir)
+		api.POST("/repos/:name/copy/:src/:file", apiReposCopyPackage)
 
 		api.POST("/repos/:name/include/:dir/:file", apiReposIncludePackageFromFile)
 		api.POST("/repos/:name/include/:dir", apiReposIncludePackageFromDir)
@@ -141,6 +172,10 @@ func Router(c *ctx.AptlyContext) http.Handler {
 	}
 
 	{
+		api.GET("/s3", apiS3List)
+	}
+
+	{
 		api.GET("/files", apiFilesListDirs)
 		api.POST("/files/:dir", apiFilesUpload)
 		api.GET("/files/:dir", apiFilesListFiles)
@@ -150,10 +185,18 @@ func Router(c *ctx.AptlyContext) http.Handler {
 
 	{
 		api.GET("/publish", apiPublishList)
+		api.GET("/publish/:prefix/:distribution", apiPublishShow)
 		api.POST("/publish", apiPublishRepoOrSnapshot)
 		api.POST("/publish/:prefix", apiPublishRepoOrSnapshot)
 		api.PUT("/publish/:prefix/:distribution", apiPublishUpdateSwitch)
 		api.DELETE("/publish/:prefix/:distribution", apiPublishDrop)
+		api.POST("/publish/:prefix/:distribution/sources", apiPublishAddSource)
+		api.GET("/publish/:prefix/:distribution/sources", apiPublishListChanges)
+		api.PUT("/publish/:prefix/:distribution/sources", apiPublishSetSources)
+		api.DELETE("/publish/:prefix/:distribution/sources", apiPublishDropChanges)
+		api.PUT("/publish/:prefix/:distribution/sources/:component", apiPublishUpdateSource)
+		api.DELETE("/publish/:prefix/:distribution/sources/:component", apiPublishRemoveSource)
+		api.POST("/publish/:prefix/:distribution/update", apiPublishUpdate)
 	}
 
 	{
@@ -164,7 +207,8 @@ func Router(c *ctx.AptlyContext) http.Handler {
 		api.GET("/snapshots/:name/packages", apiSnapshotsSearchPackages)
 		api.DELETE("/snapshots/:name", apiSnapshotsDrop)
 		api.GET("/snapshots/:name/diff/:withSnapshot", apiSnapshotsDiff)
-		api.POST("/snapshots/merge", apiSnapshotsMerge)
+		api.POST("/snapshots/:name/merge", apiSnapshotsMerge)
+		api.POST("/snapshots/:name/pull", apiSnapshotsPull)
 	}
 
 	{
@@ -188,7 +232,6 @@ func Router(c *ctx.AptlyContext) http.Handler {
 		api.GET("/tasks/:id/return_value", apiTasksReturnValueShow)
 		api.GET("/tasks/:id", apiTasksShow)
 		api.DELETE("/tasks/:id", apiTasksDelete)
-		api.POST("/tasks-dummy", apiTasksDummy)
 	}
 
 	return router

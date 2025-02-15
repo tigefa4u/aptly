@@ -2,10 +2,13 @@
 *.o
 *.a
 *.so
+unit.out
 
 # Folders
 _obj
 _test
+
+tmp/
 
 # Architecture specific extensions/prefixes
 *.[568vq]
@@ -32,8 +35,6 @@ root/
 man/aptly.1.html
 man/aptly.1.ronn
 
-.goxc.local.json
-
 system/env/
 
 # created by make build for release artifacts
@@ -42,6 +43,34 @@ aptly.test
 
 build/
 
-pgp/keyrings/aptly2*.gpg
-pgp/keyrings/aptly2*.gpg~
-pgp/keyrings/.#*
+system/files/aptly2.gpg~
+system/files/aptly2_passphrase.gpg~
+
+*.creds
+
+.go/
+obj-x86_64-linux-gnu/
+obj-aarch64-linux-gnu/
+obj-arm-linux-gnueabihf/
+obj-i686-linux-gnu/
+
+# debian
+debian/.debhelper/
+debian/aptly.substvars
+debian/aptly/
+debian/debhelper-build-stamp
+debian/files
+debian/aptly-api/
+debian/*.debhelper
+debian/*.debhelper.log
+debian/aptly-api.substvars
+debian/aptly-dbg.substvars
+debian/aptly-dbg/
+usr/bin/aptly
+dpkgs/
+debian/changelog.dpkg-bak
+
+docs/docs.go
+docs/swagger.json
+docs/swagger.yaml
+docs/swagger.conf

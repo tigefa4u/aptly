@@ -12,12 +12,14 @@ import (
 	"runtime/pprof"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/aptly-dev/aptly/aptly"
 	"github.com/aptly-dev/aptly/azure"
 	"github.com/aptly-dev/aptly/console"
 	"github.com/aptly-dev/aptly/database"
+	"github.com/aptly-dev/aptly/database/etcddb"
 	"github.com/aptly-dev/aptly/database/goleveldb"
 	"github.com/aptly-dev/aptly/deb"
 	"github.com/aptly-dev/aptly/files"
@@ -94,13 +96,14 @@ func (context *AptlyContext) config() *utils.ConfigStructure {
 				Fatal(err)
 			}
 		} else {
-			configLocations := []string{
-				filepath.Join(os.Getenv("HOME"), ".aptly.conf"),
-				"/etc/aptly.conf",
-			}
+			homeLocation := filepath.Join(os.Getenv("HOME"), ".aptly.conf")
+			configLocations := []string{homeLocation, "/usr/local/etc/aptly.conf", "/etc/aptly.conf"}
 
 			for _, configLocation := range configLocations {
 				err = utils.LoadConfig(configLocation, &utils.Config)
+				if os.IsPermission(err) || os.IsNotExist(err) {
+					continue
+				}
 				if err == nil {
 					break
 				}
@@ -110,11 +113,13 @@ func (context *AptlyContext) config() *utils.ConfigStructure {
 			}
 
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "Config file not found, creating default config at %s\n\n", configLocations[0])
+				fmt.Fprintf(os.Stderr, "Config file not found, creating default config at %s\n\n", homeLocation)
 
-				// as this is fresh aptly installation, we don't need to support legacy pool locations
-				utils.Config.SkipLegacyPool = true
-				utils.SaveConfig(configLocations[0], &utils.Config)
+				utils.SaveConfigRaw(homeLocation, aptly.AptlyConf)
+				err = utils.LoadConfig(homeLocation, &utils.Config)
+				if err != nil {
+					Fatal(fmt.Errorf("error loading config file %s: %s", homeLocation, err))
+				}
 			}
 		}
 
@@ -273,7 +278,7 @@ func (context *AptlyContext) DBPath() string {
 
 // DBPath builds path to database
 func (context *AptlyContext) dbPath() string {
-	return filepath.Join(context.config().RootDir, "db")
+	return filepath.Join(context.config().GetRootDir(), "db")
 }
 
 // Database opens and returns current instance of database
@@ -287,8 +292,18 @@ func (context *AptlyContext) Database() (database.Storage, error) {
 func (context *AptlyContext) _database() (database.Storage, error) {
 	if context.database == nil {
 		var err error
-
-		context.database, err = goleveldb.NewDB(context.dbPath())
+		switch context.config().DatabaseBackend.Type {
+		case "leveldb":
+			dbPath := filepath.Join(context.config().GetRootDir(), "db")
+			if len(context.config().DatabaseBackend.DbPath) != 0 {
+				dbPath = context.config().DatabaseBackend.DbPath
+			}
+			context.database, err = goleveldb.NewDB(dbPath)
+		case "etcd":
+			context.database, err = etcddb.NewDB(context.config().DatabaseBackend.URL)
+		default:
+			context.database, err = goleveldb.NewDB(context.dbPath())
+		}
 		if err != nil {
 			return nil, fmt.Errorf("can't instantiate database: %s", err)
 		}
@@ -345,10 +360,7 @@ func (context *AptlyContext) ReOpenDatabase() error {
 
 // NewCollectionFactory builds factory producing all kinds of collections
 func (context *AptlyContext) NewCollectionFactory() *deb.CollectionFactory {
-	context.Lock()
-	defer context.Unlock()
-
-	db, err := context._database()
+	db, err := context.Database()
 	if err != nil {
 		Fatal(err)
 	}
@@ -361,7 +373,26 @@ func (context *AptlyContext) PackagePool() aptly.PackagePool {
 	defer context.Unlock()
 
 	if context.packagePool == nil {
-		context.packagePool = files.NewPackagePool(context.config().RootDir, !context.config().SkipLegacyPool)
+		storageConfig := context.config().PackagePoolStorage
+		if storageConfig.Azure != nil {
+			var err error
+			context.packagePool, err = azure.NewPackagePool(
+				storageConfig.Azure.AccountName,
+				storageConfig.Azure.AccountKey,
+				storageConfig.Azure.Container,
+				storageConfig.Azure.Prefix,
+				storageConfig.Azure.Endpoint)
+			if err != nil {
+				Fatal(err)
+			}
+		} else {
+			poolRoot := context.config().PackagePoolStorage.Local.Path
+			if poolRoot == "" {
+				poolRoot = filepath.Join(context.config().GetRootDir(), "pool")
+			}
+
+			context.packagePool = files.NewPackagePool(poolRoot, !context.config().SkipLegacyPool)
+		}
 	}
 
 	return context.packagePool
@@ -375,7 +406,7 @@ func (context *AptlyContext) GetPublishedStorage(name string) aptly.PublishedSto
 	publishedStorage, ok := context.publishedStorages[name]
 	if !ok {
 		if name == "" {
-			publishedStorage = files.NewPublishedStorage(filepath.Join(context.config().RootDir, "public"), "hardlink", "")
+			publishedStorage = files.NewPublishedStorage(filepath.Join(context.config().GetRootDir(), "public"), "hardlink", "")
 		} else if strings.HasPrefix(name, "filesystem:") {
 			params, ok := context.config().FileSystemPublishRoots[name[11:]]
 			if !ok {
@@ -433,7 +464,7 @@ func (context *AptlyContext) GetPublishedStorage(name string) aptly.PublishedSto
 
 // UploadPath builds path to upload storage
 func (context *AptlyContext) UploadPath() string {
-	return filepath.Join(context.Config().RootDir, "upload")
+	return filepath.Join(context.Config().GetRootDir(), "upload")
 }
 
 func (context *AptlyContext) pgpProvider() string {
@@ -457,7 +488,7 @@ func (context *AptlyContext) pgpProvider() string {
 	return provider
 }
 
-func (context *AptlyContext) getGPGFinder(provider string) pgp.GPGFinder {
+func (context *AptlyContext) getGPGFinder() pgp.GPGFinder {
 	switch context.pgpProvider() {
 	case "gpg1":
 		return pgp.GPG1Finder()
@@ -480,7 +511,7 @@ func (context *AptlyContext) GetSigner() pgp.Signer {
 		return &pgp.GoSigner{}
 	}
 
-	return pgp.NewGpgSigner(context.getGPGFinder(provider))
+	return pgp.NewGpgSigner(context.getGPGFinder())
 }
 
 // GetVerifier returns Verifier with respect to provider
@@ -493,7 +524,12 @@ func (context *AptlyContext) GetVerifier() pgp.Verifier {
 		return &pgp.GoVerifier{}
 	}
 
-	return pgp.NewGpgVerifier(context.getGPGFinder(provider))
+	return pgp.NewGpgVerifier(context.getGPGFinder())
+}
+
+// SkelPath builds the local skeleton folder
+func (context *AptlyContext) SkelPath() string {
+	return filepath.Join(context.config().GetRootDir(), "skel")
 }
 
 // UpdateFlags sets internal copy of flags in the context
@@ -527,7 +563,7 @@ func (context *AptlyContext) GoContextHandleSignals() {
 
 	// Catch ^C
 	sigch := make(chan os.Signal, 1)
-	signal.Notify(sigch, os.Interrupt)
+	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
 
 	var cancel gocontext.CancelFunc
 
@@ -566,6 +602,9 @@ func (context *AptlyContext) Shutdown() {
 			context.fileMemProfile.Close()
 			context.fileMemProfile = nil
 		}
+	}
+	if context.taskList != nil {
+		context.taskList.Stop()
 	}
 	if context.database != nil {
 		context.database.Close()

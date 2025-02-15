@@ -116,8 +116,9 @@ func aptlyPublishSnapshotOrRepo(cmd *commander.Command, args []string) error {
 	origin := context.Flags().Lookup("origin").Value.String()
 	notAutomatic := context.Flags().Lookup("notautomatic").Value.String()
 	butAutomaticUpgrades := context.Flags().Lookup("butautomaticupgrades").Value.String()
+	multiDist := context.Flags().Lookup("multi-dist").Value.Get().(bool)
 
-	published, err := deb.NewPublishedRepo(storage, prefix, distribution, context.ArchitecturesList(), components, sources, collectionFactory)
+	published, err := deb.NewPublishedRepo(storage, prefix, distribution, context.ArchitecturesList(), components, sources, collectionFactory, multiDist)
 	if err != nil {
 		return fmt.Errorf("unable to publish: %s", err)
 	}
@@ -149,6 +150,10 @@ func aptlyPublishSnapshotOrRepo(cmd *commander.Command, args []string) error {
 		published.AcquireByHash = context.Flags().Lookup("acquire-by-hash").Value.Get().(bool)
 	}
 
+	if context.Flags().IsSet("multi-dist") {
+		published.MultiDist = context.Flags().Lookup("multi-dist").Value.Get().(bool)
+	}
+
 	duplicate := collectionFactory.PublishedRepoCollection().CheckDuplicate(published)
 	if duplicate != nil {
 		collectionFactory.PublishedRepoCollection().LoadComplete(duplicate, collectionFactory)
@@ -162,11 +167,10 @@ func aptlyPublishSnapshotOrRepo(cmd *commander.Command, args []string) error {
 
 	forceOverwrite := context.Flags().Lookup("force-overwrite").Value.Get().(bool)
 	if forceOverwrite {
-		context.Progress().ColoredPrintf("@rWARNING@|: force overwrite mode enabled, aptly might corrupt other published repositories sharing " +
-			"the same package pool.\n")
+		context.Progress().ColoredPrintf("@rWARNING@|: force overwrite mode enabled, aptly might corrupt other published repositories sharing the same package pool.\n")
 	}
 
-	err = published.Publish(context.PackagePool(), context, collectionFactory, signer, context.Progress(), forceOverwrite)
+	err = published.Publish(context.PackagePool(), context, collectionFactory, signer, context.Progress(), forceOverwrite, context.SkelPath())
 	if err != nil {
 		return fmt.Errorf("unable to publish: %s", err)
 	}
@@ -243,6 +247,7 @@ Example:
 	cmd.Flag.String("codename", "", "codename to publish (defaults to distribution)")
 	cmd.Flag.Bool("force-overwrite", false, "overwrite files in package pool in case of mismatch")
 	cmd.Flag.Bool("acquire-by-hash", false, "provide index files by hash")
+	cmd.Flag.Bool("multi-dist", false, "enable multiple packages with the same filename in different distributions")
 
 	return cmd
 }

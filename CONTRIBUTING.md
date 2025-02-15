@@ -2,7 +2,7 @@
 
 :+1::tada: First off, thanks for taking the time to contribute! :tada::+1:
 
-The following is a set of guidelines for contributing to [aptly](https://github.com/smira/aplty) and related repositories, which are hosted in the [aptly-dev Organization](https://github.com/aptly-dev) on GitHub.
+The following is a set of guidelines for contributing to [aptly](https://github.com/aptly-dev/aplty) and related repositories, which are hosted in the [aptly-dev Organization](https://github.com/aptly-dev) on GitHub.
 These are just guidelines, not rules. Use your best judgment, and feel free to propose changes to this document in a pull request.
 
 ## What should I know before I get started?
@@ -11,7 +11,7 @@ These are just guidelines, not rules. Use your best judgment, and feel free to p
 
 This project adheres to the Contributor Covenant [code of conduct](CODE_OF_CONDUCT.md).
 By participating, you are expected to uphold this code.
-Please report unacceptable behavior to [team@aptly.info](mailto:team@aptly.info).
+Please report unacceptable behavior on [https://github.com/aptly-dev/aptly/discussions](https://github.com/aptly-dev/aptly/discussions)
 
 ### List of Repositories
 
@@ -60,7 +60,7 @@ If you want to update website, please follow steps below:
 We're always looking for new contributions to [FAQ](https://www.aptly.info/doc/faq/), [tutorials](https://www.aptly.info/tutorial/),
 general fixes, clarifications, misspellings, grammar mistakes!
 
-### Your First Code Contribution
+### Code Contribution
 
 Please follow [next section](#development-setup) on development process. When change is ready, please submit PR
 following [PR template](.github/PULL_REQUEST_TEMPLATE.md).
@@ -68,63 +68,117 @@ following [PR template](.github/PULL_REQUEST_TEMPLATE.md).
 Make sure that purpose of your change is clear, all the tests and checks pass, and all new code is covered with tests
 if that is possible.
 
+### Get the Source
+
+To clone the git repo, run the following commands:
+```
+git clone git@github.com:aptly-dev/aptly.git
+cd aptly
+```
+
 ## Development Setup
 
-This section describes local setup to start contributing to aptly source.
+Working on aptly code can be done locally on the development machine, or for convenience by using docker. The next sections describe the setup process.
 
-### Go & Python
+### Docker Development Setup
 
-You would need `Go` (latest version is recommended) and `Python` 2.7.x (3.x is not supported yet).
+This section describes the docker setup to start contributing to aptly.
 
-If you're new to Go, follow [getting started guide](https://golang.org/doc/install) to install it and perform
-initial setup. With Go 1.8+, default `$GOPATH` is `$HOME/go`, so rest of this document assumes that.
+#### Dependencies
 
-Usually `$GOPATH/bin` is appended to your `$PATH` to make it easier to run built binaries, but you might choose
-to prepend it or to skip this test if you're security conscious.
+Install the following on your development machine:
+- docker
+- make
+- git
 
-### Forking and Cloning
+##### Docker installation on macOS
+1. Install [Docker Desktop on Mac](https://docs.docker.com/desktop/setup/install/mac-install/) (or via [Homebrew](https://brew.sh/))
+2. Allow directory sharing
+   - Open Docker Desktop
+   - Go to `Settings → Resources → File Sharing → Virtual File Shares`
+   - Add the aptly git repository path to the shared list (eg. /home/Users/john/aptly)
 
-As aptly is using Go modules, aptly repository could be cloned to any location on the file system:
+#### Create docker container
 
-    git clone git@github.com:aptly-dev/aptly.git
-    cd aptly
+To build the development docker image, run:
+```
+make docker-image
+```
 
-For main repo under your GitHub user and add it as another Git remote:
+#### Build aptly
 
-    git remote add <user> git@github.com:<user>/aptly.git
+To build the aptly in the development docker container, run:
+```
+make docker-build
+```
 
-That way you can continue to build project as is (you don't need to adjust import paths), but you would need
-to specify your remote name when pushing branches:
+#### Running aptly commands
 
-    git push <user> <your-branch>
+To run aptly commands in the development docker container, run:
+```
+make docker-shell
+```
 
-### Dependencies
+Example:
+```
+$ make docker-shell
+aptly@b43e8473ef81:/work/src$ aptly version
+aptly version: 1.5.0+189+g0fc90dff
+```
 
-You would need some additional tools and Python virtual environment to run tests and checks, install them with:
+#### Running unit tests
 
-    make prepare dev system/env
+In order to run aptly unit tests, enter the following:
+```
+make docker-unit-tests
+```
 
-This is usually one-time action.
+#### Running system tests
 
-Aptly is using Go modules to manage dependencies, download modules using:
+In order to run aptly system tests, enter the following:
+```
+make docker-system-tests
+```
 
-    make modules
+#### Running golangci-lint
 
-### Building
+In order to run aptly unit tests, run:
+```
+make docker-lint
+```
 
-If you want to build aptly binary from your current source tree, run:
+#### More info
+
+Run `make help` for more information.
+
+
+### Local Development Setup
+
+This section describes local setup to start contributing to aptly.
+
+#### Dependencies
+
+Building aptly requires go version 1.22.
+
+On Debian bookworm with backports enabled, go can be installed with:
+
+    apt install -t bookworm-backports golang-go
+
+#### Building
+
+To build aptly, run:
+
+    make build
+
+Run aptly:
+
+    build/aptly
+
+To install aptly into `$GOPATH/bin`, run:
 
     make install
 
-This would build `aptly` in `$GOPATH/bin`, so depending on your `$PATH`, you should be able to run it immediately with:
-
-    aptly
-
-Or, if it's not on your path:
-
-    ~/go/bin/aptly
-
-### Unit-tests
+#### Unit-tests
 
 aptly has two kinds of tests: unit-tests and functional (system) tests. Functional tests are preferred way to test any
 feature, but some features are much easier to test with unit-tests (e.g. algorithms, failure scenarios, ...)
@@ -133,7 +187,7 @@ aptly is using standard Go unit-test infrastructure plus [gocheck](http://labix.
 
     make test
 
-### Functional Tests
+#### Functional Tests
 
 Functional tests are implemented in Python, and they use custom test runner which is similar to Python unit-test
 runner. Most of the tests start with clean aptly state, run some aptly commands to prepare environment, and finally
@@ -180,26 +234,6 @@ There are some packages available under `system/files/` directory which are used
 this default location. You can run aptly under different user or by using non-default config location with non-default
 aptly root directory.
 
-### Style Checks
-
-Style checks could be run with:
-
-    make check
-
-aptly is using [golangci-lint](https://github.com/golangci/golangci-lint) to run style checks on Go code. Configuration
-for the linter could be found in [.golangci.yml](.golangci.yml) file.
-
-Python code (system tests) are linted with [flake8 tool](https://pypi.python.org/pypi/flake8).
-
-### Vendored Code
-
-aptly is using Go vendoring for all the libraries aptly depends upon. `vendor/` directory is checked into the source
-repository to avoid any problems if source repositories go away. Go build process will automatically prefer vendored
-packages over packages in `$GOPATH`.
-
-If you want to update vendored dependencies or to introduce new dependency, use [dep tool](https://github.com/golang/dep).
-Usually all you need is `dep ensure` or `dep ensure -update`.
-
 ### man Page
 
 aptly is using combination of [Go templates](http://godoc.org/text/template) and automatically generated text to build `aptly.1` man page. If either source
@@ -217,25 +251,3 @@ Bash and Zsh completion for aptly reside in the same repo under in [completion.d
 When new option or command is introduced, bash completion should be updated to reflect that change.
 
 When aptly package is being built, it automatically pulls bash completion and man page into the package.
-
-## Design
-
-This section requires future work.
-
-*TBD*
-
-### Database
-
-### Package Pool
-
-### Package
-
-### PackageList, PackageRefList
-
-### LocalRepo, RemoteRepo, Snapshot
-
-### PublishedRepository
-
-### Context
-
-### Collections, CollectionFactory

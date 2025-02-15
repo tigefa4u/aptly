@@ -20,6 +20,10 @@ func aptlyMirrorCreate(cmd *commander.Command, args []string) error {
 	downloadSources := LookupOption(context.Config().DownloadSourcePackages, context.Flags(), "with-sources")
 	downloadUdebs := context.Flags().Lookup("with-udebs").Value.Get().(bool)
 	downloadInstaller := context.Flags().Lookup("with-installer").Value.Get().(bool)
+	ignoreSignatures := context.Config().GpgDisableVerify
+	if context.Flags().IsSet("ignore-signatures") {
+		ignoreSignatures = context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
+	}
 
 	var (
 		mirrorName, archiveURL, distribution string
@@ -42,7 +46,7 @@ func aptlyMirrorCreate(cmd *commander.Command, args []string) error {
 		return fmt.Errorf("unable to create mirror: %s", err)
 	}
 
-	repo.Filter = context.Flags().Lookup("filter").Value.String()
+	repo.Filter = context.Flags().Lookup("filter").Value.String() // allows file/stdin with @
 	repo.FilterWithDeps = context.Flags().Lookup("filter-with-deps").Value.Get().(bool)
 	repo.SkipComponentCheck = context.Flags().Lookup("force-components").Value.Get().(bool)
 	repo.SkipArchitectureCheck = context.Flags().Lookup("force-architectures").Value.Get().(bool)
@@ -59,7 +63,7 @@ func aptlyMirrorCreate(cmd *commander.Command, args []string) error {
 		return fmt.Errorf("unable to initialize GPG verifier: %s", err)
 	}
 
-	err = repo.Fetch(context.Downloader(), verifier)
+	err = repo.Fetch(context.Downloader(), verifier, ignoreSignatures)
 	if err != nil {
 		return fmt.Errorf("unable to fetch mirror: %s", err)
 	}
@@ -99,7 +103,7 @@ Example:
 	cmd.Flag.Bool("with-installer", false, "download additional not packaged installer files")
 	cmd.Flag.Bool("with-sources", false, "download source packages in addition to binary packages")
 	cmd.Flag.Bool("with-udebs", false, "download .udeb packages (Debian installer support)")
-	cmd.Flag.String("filter", "", "filter packages in mirror")
+	AddStringOrFileFlag(&cmd.Flag, "filter", "", "filter packages in mirror, use '@file' to read filter from file or '@-' for stdin")
 	cmd.Flag.Bool("filter-with-deps", false, "when filtering, include dependencies of matching packages as well")
 	cmd.Flag.Bool("force-components", false, "(only with component list) skip check that requested components are listed in Release file")
 	cmd.Flag.Bool("force-architectures", false, "(only with architecture list) skip check that requested architectures are listed in Release file")

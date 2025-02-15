@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pborman/uuid"
+	"github.com/google/uuid"
 	"github.com/ugorji/go/codec"
 
 	"github.com/aptly-dev/aptly/aptly"
@@ -20,6 +20,16 @@ import (
 	"github.com/aptly-dev/aptly/pgp"
 	"github.com/aptly-dev/aptly/utils"
 )
+
+type SourceEntry struct {
+	Component, Name string
+}
+
+type PublishedRepoUpdateResult struct {
+	AddedSources   map[string]string
+	UpdatedSources map[string]string
+	RemovedSources map[string]string
+}
 
 type repoSourceItem struct {
 	// Pointer to snapshot if SourceKind == "snapshot"
@@ -70,6 +80,195 @@ type PublishedRepo struct {
 
 	// Provide index files per hash also
 	AcquireByHash bool
+
+	// Support multiple distributions
+	MultiDist bool
+
+	// Revision
+	Revision *PublishedRepoRevision
+}
+
+type PublishedRepoRevision struct {
+	// Map of sources: component name -> snapshot name/local repo Name
+	Sources map[string]string
+}
+
+func (result *PublishedRepoUpdateResult) AddedComponents() []string {
+	components := make([]string, 0, len(result.AddedSources))
+	for component := range result.AddedSources {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+
+	return components
+}
+
+func (result *PublishedRepoUpdateResult) UpdatedComponents() []string {
+	components := make([]string, 0, len(result.UpdatedSources))
+	for component := range result.UpdatedSources {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+
+	return components
+}
+
+func (result *PublishedRepoUpdateResult) RemovedComponents() []string {
+	components := make([]string, 0, len(result.RemovedSources))
+	for component := range result.RemovedSources {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+
+	return components
+}
+
+func (revision *PublishedRepoRevision) Components() []string {
+	components := make([]string, 0, len(revision.Sources))
+	for component := range revision.Sources {
+		components = append(components, component)
+	}
+	sort.Strings(components)
+
+	return components
+}
+
+func (revision *PublishedRepoRevision) SourceList() []SourceEntry {
+	sources := revision.Sources
+	components := revision.Components()
+	sourceList := make([]SourceEntry, 0, len(sources))
+	for _, component := range components {
+		name := sources[component]
+		sourceList = append(sourceList, SourceEntry{
+			Component: component,
+			Name:      name,
+		})
+	}
+
+	return sourceList
+}
+
+func (revision *PublishedRepoRevision) SourceNames() []string {
+	sources := revision.Sources
+	names := make([]string, 0, len(sources))
+	for _, component := range revision.Components() {
+		names = append(names, sources[component])
+	}
+
+	return names
+}
+
+func (p *PublishedRepo) DropRevision() *PublishedRepoRevision {
+	revision := p.Revision
+	p.Revision = nil
+
+	return revision
+}
+
+func (p *PublishedRepo) ObtainRevision() *PublishedRepoRevision {
+	revision := p.Revision
+	if revision == nil {
+		sources := make(map[string]string, len(p.Sources))
+		for _, component := range p.Components() {
+			item := p.sourceItems[component]
+			if item.snapshot != nil {
+				sources[component] = item.snapshot.Name
+			} else if item.localRepo != nil {
+				sources[component] = item.localRepo.Name
+			} else {
+				panic("no snapshot/localRepo")
+			}
+		}
+		revision = &PublishedRepoRevision{
+			Sources: sources,
+		}
+		p.Revision = revision
+	}
+	return revision
+}
+
+func (p *PublishedRepo) Update(collectionFactory *CollectionFactory, _ aptly.Progress) (*PublishedRepoUpdateResult, error) {
+	result := &PublishedRepoUpdateResult{
+		AddedSources:   map[string]string{},
+		UpdatedSources: map[string]string{},
+		RemovedSources: map[string]string{},
+	}
+
+	revision := p.DropRevision()
+	if revision == nil {
+		if p.SourceKind == SourceLocalRepo {
+			// Re-fetch packages from local repository
+			for component, item := range p.sourceItems {
+				localRepo := item.localRepo
+				if localRepo != nil {
+					p.UpdateLocalRepo(component, localRepo)
+					result.UpdatedSources[component] = localRepo.Name
+				}
+			}
+		}
+	} else {
+		for _, component := range p.Components() {
+			name, exists := revision.Sources[component]
+			if !exists {
+				p.RemoveComponent(component)
+				result.RemovedSources[component] = name
+			}
+		}
+
+		if p.SourceKind == SourceLocalRepo {
+			localRepoCollection := collectionFactory.LocalRepoCollection()
+			for component, name := range revision.Sources {
+				localRepo, err := localRepoCollection.ByName(name)
+				if err != nil {
+					return result, fmt.Errorf("unable to update: %s", err)
+				}
+
+				err = localRepoCollection.LoadComplete(localRepo)
+				if err != nil {
+					return result, fmt.Errorf("unable to update: %s", err)
+				}
+
+				_, exists := p.Sources[component]
+				if exists {
+					// Even in the case, when the local repository has not been changed as package source,
+					// it may contain a modified set of packages that requires (re-)publication.
+					p.UpdateLocalRepo(component, localRepo)
+					result.UpdatedSources[component] = name
+				} else {
+					p.UpdateLocalRepo(component, localRepo)
+					result.AddedSources[component] = name
+				}
+			}
+		} else if p.SourceKind == SourceSnapshot {
+			snapshotCollection := collectionFactory.SnapshotCollection()
+			for component, name := range revision.Sources {
+				snapshot, err := snapshotCollection.ByName(name)
+				if err != nil {
+					return result, fmt.Errorf("unable to update: %s", err)
+				}
+
+				err = snapshotCollection.LoadComplete(snapshot)
+				if err != nil {
+					return result, fmt.Errorf("unable to update: %s", err)
+				}
+
+				sourceUUID, exists := p.Sources[component]
+				if exists {
+					if snapshot.UUID != sourceUUID {
+						p.UpdateSnapshot(component, snapshot)
+						result.UpdatedSources[component] = name
+					}
+				} else {
+					p.UpdateSnapshot(component, snapshot)
+					result.AddedSources[component] = name
+				}
+			}
+		} else {
+			return result, fmt.Errorf("unknown published repository type")
+		}
+	}
+
+	return result, nil
 }
 
 // ParsePrefix splits [storage:]prefix into components
@@ -153,13 +352,14 @@ func walkUpTree(source interface{}, collectionFactory *CollectionFactory) (rootD
 // distribution and architectures are user-defined properties
 // components & sources are lists of component to source mapping (*Snapshot or *LocalRepo)
 func NewPublishedRepo(storage, prefix, distribution string, architectures []string,
-	components []string, sources []interface{}, collectionFactory *CollectionFactory) (*PublishedRepo, error) {
+	components []string, sources []interface{}, collectionFactory *CollectionFactory, multiDist bool) (*PublishedRepo, error) {
 	result := &PublishedRepo{
-		UUID:          uuid.New(),
+		UUID:          uuid.NewString(),
 		Storage:       storage,
 		Architectures: architectures,
 		Sources:       make(map[string]string),
 		sourceItems:   make(map[string]repoSourceItem),
+		MultiDist:     multiDist,
 	}
 
 	if len(sources) == 0 {
@@ -197,9 +397,6 @@ func NewPublishedRepo(storage, prefix, distribution string, architectures []stri
 		if distribution == "" || component == "" {
 			rootDistributions, rootComponents := walkUpTree(source, collectionFactory)
 			if distribution == "" {
-				for i := range rootDistributions {
-					rootDistributions[i] = strings.Replace(rootDistributions[i], "/", "-", -1)
-				}
 				discoveredDistributions = append(discoveredDistributions, rootDistributions...)
 			}
 			if component == "" {
@@ -264,10 +461,6 @@ func NewPublishedRepo(storage, prefix, distribution string, architectures []stri
 		}
 	}
 
-	if strings.Contains(distribution, "/") {
-		return nil, fmt.Errorf("invalid distribution %s, '/' is not allowed", distribution)
-	}
-
 	result.Distribution = distribution
 
 	// only fields which are unique by all given snapshots are set on published
@@ -284,14 +477,28 @@ func NewPublishedRepo(storage, prefix, distribution string, architectures []stri
 	return result, nil
 }
 
-// MarshalJSON requires object to be "loaded completely"
-func (p *PublishedRepo) MarshalJSON() ([]byte, error) {
-	type sourceInfo struct {
-		Component, Name string
+func (revision *PublishedRepoRevision) MarshalJSON() ([]byte, error) {
+	sources := revision.Sources
+	components := revision.Components()
+	sourceList := make([]SourceEntry, 0, len(sources))
+	for _, component := range components {
+		name := sources[component]
+		sourceList = append(sourceList, SourceEntry{
+			Component: component,
+			Name:      name,
+		})
 	}
 
-	sources := []sourceInfo{}
-	for component, item := range p.sourceItems {
+	return json.Marshal(map[string]interface{}{
+		"Sources": sourceList,
+	})
+}
+
+// MarshalJSON requires object to filled by "LoadShallow" or "LoadComplete"
+func (p *PublishedRepo) MarshalJSON() ([]byte, error) {
+	sources := []SourceEntry{}
+	for _, component := range p.Components() {
+		item := p.sourceItems[component]
 		name := ""
 		if item.snapshot != nil {
 			name = item.snapshot.Name
@@ -300,7 +507,7 @@ func (p *PublishedRepo) MarshalJSON() ([]byte, error) {
 		} else {
 			panic("no snapshot/local repo")
 		}
-		sources = append(sources, sourceInfo{
+		sources = append(sources, SourceEntry{
 			Component: component,
 			Name:      name,
 		})
@@ -322,6 +529,7 @@ func (p *PublishedRepo) MarshalJSON() ([]byte, error) {
 		"Storage":              p.Storage,
 		"SkipContents":         p.SkipContents,
 		"AcquireByHash":        p.AcquireByHash,
+		"MultiDist":            p.MultiDist,
 	})
 }
 
@@ -446,30 +654,46 @@ func (p *PublishedRepo) SourceNames() []string {
 	return sources
 }
 
-// UpdateLocalRepo updates content from local repo in component
-func (p *PublishedRepo) UpdateLocalRepo(component string) {
+// UpdateLocalRepo inserts/updates local repository source for component
+func (p *PublishedRepo) UpdateLocalRepo(component string, localRepo *LocalRepo) {
 	if p.SourceKind != SourceLocalRepo {
 		panic("not local repo publish")
 	}
 
-	item := p.sourceItems[component]
-	item.packageRefs = item.localRepo.RefList()
+	item, exists := p.sourceItems[component]
+	if !exists {
+		item = repoSourceItem{}
+	}
+	item.localRepo = localRepo
+	item.packageRefs = localRepo.RefList()
 	p.sourceItems[component] = item
 
+	p.Sources[component] = localRepo.UUID
 	p.rePublishing = true
 }
 
-// UpdateSnapshot switches snapshot for component
+// UpdateSnapshot inserts/updates snapshot source for component
 func (p *PublishedRepo) UpdateSnapshot(component string, snapshot *Snapshot) {
 	if p.SourceKind != SourceSnapshot {
 		panic("not snapshot publish")
 	}
 
-	item := p.sourceItems[component]
+	item, exists := p.sourceItems[component]
+	if !exists {
+		item = repoSourceItem{}
+	}
 	item.snapshot = snapshot
 	p.sourceItems[component] = item
 
 	p.Sources[component] = snapshot.UUID
+	p.rePublishing = true
+}
+
+// RemoveComponent removes component from published repository
+func (p *PublishedRepo) RemoveComponent(component string) {
+	delete(p.Sources, component)
+	delete(p.sourceItems, component)
+
 	p.rePublishing = true
 }
 
@@ -549,9 +773,47 @@ func (p *PublishedRepo) GetCodename() string {
 	return p.Codename
 }
 
+// GetSkelFiles returns a map of files to be added to a repo. Key being the relative
+// path from component folder, and value being the full local FS path.
+func (p *PublishedRepo) GetSkelFiles(skelDir string, component string) (map[string]string, error) {
+	files := make(map[string]string)
+
+	if skelDir == "" {
+		return files, nil
+	}
+
+	fsPath := filepath.Join(skelDir, p.Prefix, "dists", p.Distribution, component)
+	if err := filepath.Walk(fsPath, func(path string, _ os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		stat, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+
+		if !stat.Mode().IsRegular() {
+			return nil
+		}
+
+		relativePath, err := filepath.Rel(fsPath, path)
+		if err != nil {
+			return err
+		}
+
+		files[relativePath] = path
+		return nil
+	}); err != nil && !os.IsNotExist(err) {
+		return files, err
+	}
+
+	return files, nil
+}
+
 // Publish publishes snapshot (repository) contents, links package files, generates Packages & Release files, signs them
 func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageProvider aptly.PublishedStorageProvider,
-	collectionFactory *CollectionFactory, signer pgp.Signer, progress aptly.Progress, forceOverwrite bool) error {
+	collectionFactory *CollectionFactory, signer pgp.Signer, progress aptly.Progress, forceOverwrite bool, skelDir string) error {
 	publishedStorage := publishedStorageProvider.GetPublishedStorage(p.Storage)
 
 	err := publishedStorage.MkDir(filepath.Join(p.Prefix, "pool"))
@@ -641,7 +903,7 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 
 		// For all architectures, pregenerate packages/sources files
 		for _, arch := range p.Architectures {
-			indexes.PackageIndex(component, arch, false, false)
+			indexes.PackageIndex(component, arch, false, false, p.Distribution)
 		}
 
 		list.PrepareIndex()
@@ -663,9 +925,18 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 						if err2 != nil {
 							return err2
 						}
-						relPath = filepath.Join("pool", component, poolDir)
+						if p.MultiDist {
+							relPath = filepath.Join("pool", p.Distribution, component, poolDir)
+						} else {
+							relPath = filepath.Join("pool", component, poolDir)
+						}
+
 					} else {
-						relPath = filepath.Join("dists", p.Distribution, component, fmt.Sprintf("%s-%s", pkg.Name, arch), "current", "images")
+						if p.Distribution == aptly.DistributionFocal {
+							relPath = filepath.Join("dists", p.Distribution, component, fmt.Sprintf("%s-%s", pkg.Name, arch), "current", "legacy-images")
+						} else {
+							relPath = filepath.Join("dists", p.Distribution, component, fmt.Sprintf("%s-%s", pkg.Name, arch), "current", "images")
+						}
 					}
 
 					err = pkg.LinkFromPool(publishedStorage, packagePool, p.Prefix, relPath, forceOverwrite)
@@ -703,7 +974,7 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 						}
 					}
 
-					bufWriter, err = indexes.PackageIndex(component, arch, pkg.IsUdeb, pkg.IsInstaller).BufWriter()
+					bufWriter, err = indexes.PackageIndex(component, arch, pkg.IsUdeb, pkg.IsInstaller, p.Distribution).BufWriter()
 					if err != nil {
 						return err
 					}
@@ -751,13 +1022,37 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 			}
 		}
 
+		for component := range p.sourceItems {
+			skelFiles, err := p.GetSkelFiles(skelDir, component)
+			if err != nil {
+				return fmt.Errorf("unable to get skeleton files: %v", err)
+			}
+
+			for relPath, absPath := range skelFiles {
+				bufWriter, err := indexes.SkelIndex(component, relPath).BufWriter()
+				if err != nil {
+					return fmt.Errorf("unable to generate skeleton index: %v", err)
+				}
+
+				file, err := os.Open(absPath)
+				if err != nil {
+					return fmt.Errorf("unable to read skeleton file: %v", err)
+				}
+
+				_, err = bufio.NewReader(file).WriteTo(bufWriter)
+				if err != nil {
+					return fmt.Errorf("unable to write skeleton file: %v", err)
+				}
+			}
+		}
+
 		udebs := []bool{false}
 		if hadUdebs {
 			udebs = append(udebs, true)
 
 			// For all architectures, pregenerate .udeb indexes
 			for _, arch := range p.Architectures {
-				indexes.PackageIndex(component, arch, true, false)
+				indexes.PackageIndex(component, arch, true, false, p.Distribution)
 			}
 		}
 
@@ -990,8 +1285,11 @@ func (collection *PublishedRepoCollection) Update(repo *PublishedRepo) error {
 	return batch.Write()
 }
 
-// LoadComplete loads additional information for remote repo
-func (collection *PublishedRepoCollection) LoadComplete(repo *PublishedRepo, collectionFactory *CollectionFactory) (err error) {
+// LoadShallow loads basic information on the repo's sources
+//
+// This does not *fully* load in the sources themselves and their packages.
+// It's useful if you just want to use JSON serialization without loading in unnecessary things.
+func (collection *PublishedRepoCollection) LoadShallow(repo *PublishedRepo, collectionFactory *CollectionFactory) (err error) {
 	repo.sourceItems = make(map[string]repoSourceItem)
 
 	if repo.SourceKind == SourceSnapshot {
@@ -999,10 +1297,6 @@ func (collection *PublishedRepoCollection) LoadComplete(repo *PublishedRepo, col
 			item := repoSourceItem{}
 
 			item.snapshot, err = collectionFactory.SnapshotCollection().ByUUID(sourceUUID)
-			if err != nil {
-				return
-			}
-			err = collectionFactory.SnapshotCollection().LoadComplete(item.snapshot)
 			if err != nil {
 				return
 			}
@@ -1017,6 +1311,30 @@ func (collection *PublishedRepoCollection) LoadComplete(repo *PublishedRepo, col
 			if err != nil {
 				return
 			}
+
+			item.packageRefs = &PackageRefList{}
+			repo.sourceItems[component] = item
+		}
+	} else {
+		panic("unknown SourceKind")
+	}
+
+	return
+}
+
+// LoadComplete loads complete information on the sources of the repo *and* their packages
+func (collection *PublishedRepoCollection) LoadComplete(repo *PublishedRepo, collectionFactory *CollectionFactory) (err error) {
+	collection.LoadShallow(repo, collectionFactory)
+
+	if repo.SourceKind == SourceSnapshot {
+		for _, item := range repo.sourceItems {
+			err = collectionFactory.SnapshotCollection().LoadComplete(item.snapshot)
+			if err != nil {
+				return
+			}
+		}
+	} else if repo.SourceKind == SourceLocalRepo {
+		for component, item := range repo.sourceItems {
 			err = collectionFactory.LocalRepoCollection().LoadComplete(item.localRepo)
 			if err != nil {
 				return
@@ -1035,13 +1353,10 @@ func (collection *PublishedRepoCollection) LoadComplete(repo *PublishedRepo, col
 				}
 			}
 
-			item.packageRefs = &PackageRefList{}
 			err = item.packageRefs.Decode(encoded)
 			if err != nil {
 				return
 			}
-
-			repo.sourceItems[component] = item
 		}
 	} else {
 		panic("unknown SourceKind")
@@ -1123,7 +1438,7 @@ func (collection *PublishedRepoCollection) ByLocalRepo(repo *LocalRepo) []*Publi
 
 // ForEach runs method for each repository
 func (collection *PublishedRepoCollection) ForEach(handler func(*PublishedRepo) error) error {
-	return collection.db.ProcessByPrefix([]byte("U"), func(key, blob []byte) error {
+	return collection.db.ProcessByPrefix([]byte("U"), func(_, blob []byte) error {
 		r := &PublishedRepo{}
 		if err := r.Decode(blob); err != nil {
 			log.Printf("Error decoding published repo: %s\n", err)
@@ -1141,21 +1456,13 @@ func (collection *PublishedRepoCollection) Len() int {
 	return len(collection.list)
 }
 
-// CleanupPrefixComponentFiles removes all unreferenced files in published storage under prefix/component pair
-func (collection *PublishedRepoCollection) CleanupPrefixComponentFiles(prefix string, components []string,
-	publishedStorage aptly.PublishedStorage, collectionFactory *CollectionFactory, progress aptly.Progress) error {
-
-	collection.loadList()
-
-	var err error
+func (collection *PublishedRepoCollection) listReferencedFilesByComponent(prefix string, components []string,
+	collectionFactory *CollectionFactory, progress aptly.Progress) (map[string][]string, error) {
 	referencedFiles := map[string][]string{}
-
-	if progress != nil {
-		progress.Printf("Cleaning up prefix %#v components %s...\n", prefix, strings.Join(components, ", "))
-	}
+	processedComponentRefs := map[string]*PackageRefList{}
 
 	for _, r := range collection.list {
-		if r.Prefix == prefix {
+		if r.Prefix == prefix && !r.MultiDist {
 			matches := false
 
 			repoComponents := r.Components()
@@ -1171,16 +1478,28 @@ func (collection *PublishedRepoCollection) CleanupPrefixComponentFiles(prefix st
 				continue
 			}
 
-			err = collection.LoadComplete(r, collectionFactory)
-			if err != nil {
-				return err
+			if err := collection.LoadComplete(r, collectionFactory); err != nil {
+				return nil, err
 			}
 
 			for _, component := range components {
 				if utils.StrSliceHasItem(repoComponents, component) {
-					packageList, err := NewPackageListFromRefList(r.RefList(component), collectionFactory.PackageCollection(), progress)
+					unseenRefs := r.RefList(component)
+					processedRefs := processedComponentRefs[component]
+					if processedRefs != nil {
+						unseenRefs = unseenRefs.Subtract(processedRefs)
+					} else {
+						processedRefs = NewPackageRefList()
+					}
+
+					if unseenRefs.Len() == 0 {
+						continue
+					}
+					processedComponentRefs[component] = processedRefs.Merge(unseenRefs, false, true)
+
+					packageList, err := NewPackageListFromRefList(unseenRefs, collectionFactory.PackageCollection(), progress)
 					if err != nil {
-						return err
+						return nil, err
 					}
 
 					packageList.ForEach(func(p *Package) error {
@@ -1200,28 +1519,132 @@ func (collection *PublishedRepoCollection) CleanupPrefixComponentFiles(prefix st
 		}
 	}
 
-	for _, component := range components {
+	return referencedFiles, nil
+}
+
+// CleanupPrefixComponentFiles removes all unreferenced files in published storage under prefix/component pair
+func (collection *PublishedRepoCollection) CleanupPrefixComponentFiles(publishedStorageProvider aptly.PublishedStorageProvider,
+	published *PublishedRepo, cleanComponents []string, collectionFactory *CollectionFactory, progress aptly.Progress) error {
+
+	var err error
+
+	collection.loadList()
+
+	storage := published.Storage
+	prefix := published.Prefix
+	distribution := published.Distribution
+
+	rootPath := filepath.Join(prefix, "dists", distribution)
+	publishedStorage := publishedStorageProvider.GetPublishedStorage(published.Storage)
+
+	sort.Strings(cleanComponents)
+	publishedComponents := published.Components()
+	removedComponents := utils.StrSlicesSubstract(cleanComponents, publishedComponents)
+	updatedComponents := utils.StrSlicesSubstract(cleanComponents, removedComponents)
+
+	if progress != nil {
+		progress.Printf("Cleaning up published repository %s/%s...\n", published.StoragePrefix(), distribution)
+	}
+
+	for _, component := range removedComponents {
+		if progress != nil {
+			progress.Printf("Removing component '%s'...\n", component)
+		}
+
+		err = publishedStorage.RemoveDirs(filepath.Join(rootPath, component), progress)
+		if err != nil {
+			return err
+		}
+
+		// Ensure that component does not exist in multi distribution pool
+		err = publishedStorage.RemoveDirs(filepath.Join(prefix, "pool", distribution, component), nil)
+		if err != nil {
+			return err
+		}
+	}
+
+	referencedFiles := map[string][]string{}
+
+	if published.MultiDist {
+		rootPath = filepath.Join(prefix, "pool", distribution)
+
+		// Get all referenced files by component for determining orphaned pool files.
+		for _, component := range publishedComponents {
+			packageList, err := NewPackageListFromRefList(published.RefList(component), collectionFactory.PackageCollection(), progress)
+			if err != nil {
+				return err
+			}
+
+			packageList.ForEach(func(p *Package) error {
+				poolDir, err := p.PoolDirectory()
+				if err != nil {
+					return err
+				}
+
+				for _, file := range p.Files() {
+					referencedFiles[component] = append(referencedFiles[component], filepath.Join(poolDir, file.Filename))
+				}
+
+				return nil
+			})
+		}
+	} else {
+		rootPath = filepath.Join(prefix, "pool")
+
+		// In case of a shared component pool directory, we must check, if a component is no longer referenced by any other
+		// published repository within the same prefix.
+		referencedComponents := map[string]struct{}{}
+		for _, p := range collection.list {
+			if p.Prefix == prefix && p.Storage == storage && !p.MultiDist {
+				for _, component := range p.Components() {
+					referencedComponents[component] = struct{}{}
+				}
+			}
+		}
+
+		// Remove orphaned component pool directories in the prefix.
+		for _, component := range removedComponents {
+			_, exists := referencedComponents[component]
+			if !exists {
+				err := publishedStorage.RemoveDirs(filepath.Join(rootPath, component), progress)
+				if err != nil {
+					return err
+				}
+			}
+		}
+
+		// Get all referenced files by component for determining orphaned pool files.
+		referencedFiles, err = collection.listReferencedFilesByComponent(prefix, publishedComponents, collectionFactory, progress)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, component := range updatedComponents {
+		if progress != nil {
+			progress.Printf("Cleaning up component '%s'...\n", component)
+		}
 		sort.Strings(referencedFiles[component])
 
-		rootPath := filepath.Join(prefix, "pool", component)
-		existingFiles, err := publishedStorage.Filelist(rootPath)
+		path := filepath.Join(rootPath, component)
+		existingFiles, err := publishedStorage.Filelist(path)
 		if err != nil {
 			return err
 		}
 
 		sort.Strings(existingFiles)
 
-		filesToDelete := utils.StrSlicesSubstract(existingFiles, referencedFiles[component])
+		orphanedFiles := utils.StrSlicesSubstract(existingFiles, referencedFiles[component])
 
-		for _, file := range filesToDelete {
-			err = publishedStorage.Remove(filepath.Join(rootPath, file))
+		for _, file := range orphanedFiles {
+			err = publishedStorage.Remove(filepath.Join(path, file))
 			if err != nil {
 				return err
 			}
 		}
 	}
 
-	return nil
+	return err
 }
 
 // Remove removes published repository, cleaning up directories, files
@@ -1233,6 +1656,11 @@ func (collection *PublishedRepoCollection) Remove(publishedStorageProvider aptly
 	collection.loadList()
 
 	repo, err := collection.ByStoragePrefixDistribution(storage, prefix, distribution)
+	if err != nil {
+		return err
+	}
+
+	err = collection.LoadComplete(repo, collectionFactory)
 	if err != nil {
 		return err
 	}
@@ -1272,8 +1700,7 @@ func (collection *PublishedRepoCollection) Remove(publishedStorageProvider aptly
 		nil, collection.list[len(collection.list)-1], collection.list[:len(collection.list)-1]
 
 	if !skipCleanup && len(cleanComponents) > 0 {
-		err = collection.CleanupPrefixComponentFiles(repo.Prefix, cleanComponents,
-			publishedStorageProvider.GetPublishedStorage(storage), collectionFactory, progress)
+		err = collection.CleanupPrefixComponentFiles(publishedStorageProvider, repo, cleanComponents, collectionFactory, progress)
 		if err != nil {
 			if !force {
 				return fmt.Errorf("cleanup failed, use -force-drop to override: %s", err)
