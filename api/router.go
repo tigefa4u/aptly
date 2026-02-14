@@ -158,6 +158,7 @@ func Router(c *ctx.AptlyContext) http.Handler {
 		api.GET("/mirrors/:name", apiMirrorsShow)
 		api.GET("/mirrors/:name/packages", apiMirrorsPackages)
 		api.POST("/mirrors", apiMirrorsCreate)
+		api.POST("/mirrors/:name", apiMirrorsEdit)
 		api.PUT("/mirrors/:name", apiMirrorsUpdate)
 		api.DELETE("/mirrors/:name", apiMirrorsDrop)
 	}

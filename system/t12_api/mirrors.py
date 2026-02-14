@@ -151,3 +151,152 @@ class MirrorsAPITestSkipArchitectureCheck(APITest):
                        'IgnoreSignatures': True}
         resp = self.put_task("/api/mirrors/" + mirror_name, json=mirror_desc)
         self.check_task(resp)
+
+
+class MirrorsAPITestEdit(APITest):
+    """
+    POST /api/mirrors/{name} - Edit mirror configuration
+    """
+    def check(self):
+        # Create a mirror first
+        mirror_name = self.random_name()
+        mirror_desc = {'Name': mirror_name,
+                       'ArchiveURL': 'http://repo.aptly.info/system-tests/packagecloud.io/varnishcache/varnish30/debian/',
+                       'IgnoreSignatures': True,
+                       'Distribution': 'wheezy',
+                       'Components': ['main'],
+                       'Architectures': ['amd64']}
+
+        resp = self.post("/api/mirrors", json=mirror_desc)
+        self.check_equal(resp.status_code, 201)
+
+        # Test editing basic properties (Filter, FilterWithDeps, Download options)
+        edit_params = {
+            'Filter': 'varnish',
+            'FilterWithDeps': True,
+            'DownloadSources': True,
+            'DownloadInstaller': False,
+            'DownloadUdebs': False
+        }
+
+        resp = self.post("/api/mirrors/" + mirror_name, json=edit_params)
+        self.check_equal(resp.status_code, 200)
+        self.check_subset({
+            'Name': mirror_name,
+            'Filter': 'varnish',
+            'FilterWithDeps': True,
+            'DownloadSources': True
+        }, resp.json())
+
+        # Verify the changes persisted
+        resp = self.get("/api/mirrors/" + mirror_name)
+        self.check_equal(resp.status_code, 200)
+        self.check_subset({
+            'Filter': 'varnish',
+            'FilterWithDeps': True,
+            'DownloadSources': True
+        }, resp.json())
+
+        # Test editing with empty filter to clear it
+        edit_params = {'Filter': ''}
+        resp = self.post("/api/mirrors/" + mirror_name, json=edit_params)
+        self.check_equal(resp.status_code, 200)
+        self.check_equal(resp.json()['Filter'], '')
+
+
+class MirrorsAPITestEditNotFound(APITest):
+    """
+    POST /api/mirrors/{name} - Edit non-existent mirror
+    """
+    def check(self):
+        resp = self.post("/api/mirrors/non-existent-mirror", json={'Filter': 'test'})
+        self.check_equal(resp.status_code, 404)
+        self.check_in('unable to edit', resp.json()['error'])
+
+
+class MirrorsAPITestEditArchitectures(APITest):
+    """
+    POST /api/mirrors/{name} - Edit mirror architectures (triggers fetch)
+    """
+    def check(self):
+        # Create a mirror
+        mirror_name = self.random_name()
+        mirror_desc = {'Name': mirror_name,
+                       'ArchiveURL': 'http://repo.aptly.info/system-tests/security.debian.org/debian-security/',
+                       'IgnoreSignatures': True,
+                       'Distribution': 'buster/updates',
+                       'Components': ['main'],
+                       'Architectures': ['amd64']}
+
+        resp = self.post("/api/mirrors", json=mirror_desc)
+        self.check_equal(resp.status_code, 201)
+
+        # Edit architectures (should trigger a fetch)
+        edit_params = {
+            'Architectures': ['amd64', 'i386'],
+            'IgnoreSignatures': True
+        }
+
+        resp = self.post("/api/mirrors/" + mirror_name, json=edit_params)
+        self.check_equal(resp.status_code, 200)
+
+        # Verify architectures were updated
+        resp = self.get("/api/mirrors/" + mirror_name)
+        self.check_equal(resp.status_code, 200)
+        architectures = resp.json()['Architectures']
+        self.check_equal(sorted(architectures), ['amd64', 'i386'])
+
+
+class MirrorsAPITestEditArchiveURL(APITest):
+    """
+    POST /api/mirrors/{name} - Edit mirror archive URL (triggers fetch)
+    """
+    def check(self):
+        # Create a mirror
+        mirror_name = self.random_name()
+        mirror_desc = {'Name': mirror_name,
+                       'ArchiveURL': 'http://repo.aptly.info/system-tests/ftp.ru.debian.org/debian',
+                       'IgnoreSignatures': True,
+                       'Distribution': 'bookworm',
+                       'Components': ['main'],
+                       'Architectures': ['amd64']}
+
+        resp = self.post("/api/mirrors", json=mirror_desc)
+        self.check_equal(resp.status_code, 201)
+
+        # Edit archive URL (should trigger a fetch)
+        edit_params = {
+            'ArchiveURL': 'http://repo.aptly.info/system-tests/ftp.ch.debian.org/debian',
+            'IgnoreSignatures': True
+        }
+
+        resp = self.post("/api/mirrors/" + mirror_name, json=edit_params)
+        self.check_equal(resp.status_code, 200)
+
+        # Verify URL was updated
+        resp = self.get("/api/mirrors/" + mirror_name)
+        self.check_equal(resp.status_code, 200)
+        self.check_equal(resp.json()['ArchiveRoot'], 'http://repo.aptly.info/system-tests/ftp.ch.debian.org/debian/')
+
+
+class MirrorsAPITestEditFlatMirrorUdebs(APITest):
+    """
+    POST /api/mirrors/{name} - Edit flat mirror with udebs (should fail)
+    """
+    def check(self):
+        # Create a flat mirror
+        mirror_name = self.random_name()
+        mirror_desc = {'Name': mirror_name,
+                       'ArchiveURL': 'http://repo.aptly.info/system-tests/cloud.r-project.org/bin/linux/debian/bullseye-cran40/',
+                       'IgnoreSignatures': True,
+                       'Architectures': ['amd64']}
+
+        resp = self.post("/api/mirrors", json=mirror_desc)
+        self.check_equal(resp.status_code, 201)
+
+        # Try to enable udebs on a flat mirror (should fail)
+        edit_params = {'DownloadUdebs': True}
+
+        resp = self.post("/api/mirrors/" + mirror_name, json=edit_params)
+        self.check_equal(resp.status_code, 400)
+        self.check_in("flat mirrors don't support udebs", resp.json()['error'])

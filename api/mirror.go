@@ -31,6 +31,36 @@ func getVerifier(keyRings []string) (pgp.Verifier, error) {
 	return verifier, nil
 }
 
+// stringSlicesEqual compares two string slices for equality (order matters)
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// uniqueStrings returns a new slice with only unique strings from the input, sorted
+func uniqueStrings(input []string) []string {
+	if len(input) == 0 {
+		return input
+	}
+	seen := make(map[string]struct{}, len(input))
+	result := make([]string, 0, len(input))
+	for _, s := range input {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
 // @Summary List Mirrors
 // @Description **Show list of currently available mirrors**
 // @Description Each mirror is returned as in “show” API.
@@ -328,6 +358,128 @@ func apiMirrorsPackages(c *gin.Context) {
 	} else {
 		c.JSON(200, list.Strings())
 	}
+}
+
+type mirrorEditParams struct {
+	// Package query that is applied to mirror packages
+	Filter *string `         json:"Filter" example:"xserver-xorg"`
+	// Set "true" to include dependencies of matching packages when filtering
+	FilterWithDeps *bool `   json:"FilterWithDeps"`
+	// Set "true" to mirror installer files
+	DownloadInstaller *bool `json:"DownloadInstaller"`
+	// Set "true" to mirror source packages
+	DownloadSources *bool `  json:"DownloadSources"`
+	// Set "true" to mirror udeb files
+	DownloadUdebs *bool `    json:"DownloadUdebs"`
+	// URL of the archive to mirror
+	ArchiveURL *string `     json:"ArchiveURL"     example:"http://deb.debian.org/debian"`
+	// Comma separated list of architectures
+	Architectures *[]string `json:"Architectures"  example:"amd64"`
+	// Gpg keyring(s) for verifying Release file if a mirror update is required.
+	Keyrings []string `      json:"Keyrings"       example:"trustedkeys.gpg"`
+	// Set "true" to skip the verification of Release file signatures
+	IgnoreSignatures *bool ` json:"IgnoreSignatures"`
+}
+
+// @Summary Edit Mirror
+// @Description **Edit mirror config**
+// @Tags Mirrors
+// @Param name path string true "mirror name to edit"
+// @Consume json
+// @Param request body mirrorEditParams true "Parameters"
+// @Produce json
+// @Success 200 {object} deb.RemoteRepo "Mirror was edited successfully"
+// @Failure 400 {object} Error "Bad Request"
+// @Failure 404 {object} Error "Mirror not found"
+// @Failure 409 {object} Error "Aptly db locked"
+// @Failure 500 {object} Error "Internal Error"
+// @Router /api/mirrors/{name} [post]
+func apiMirrorsEdit(c *gin.Context) {
+	var (
+		err  error
+		b    mirrorEditParams
+		repo *deb.RemoteRepo
+	)
+
+	collectionFactory := context.NewCollectionFactory()
+	collection := collectionFactory.RemoteRepoCollection()
+
+	name := c.Params.ByName("name")
+	repo, err = collection.ByName(name)
+	if err != nil {
+		AbortWithJSONError(c, 404, fmt.Errorf("unable to edit: %s", err))
+		return
+	}
+
+	err = repo.CheckLock()
+	if err != nil {
+		AbortWithJSONError(c, 409, fmt.Errorf("unable to edit: %s", err))
+		return
+	}
+
+	if c.Bind(&b) != nil {
+		return
+	}
+
+	fetchMirror := false
+	ignoreSignatures := context.Config().GpgDisableVerify
+
+	if b.Filter != nil {
+		repo.Filter = *b.Filter
+	}
+	if b.FilterWithDeps != nil {
+		repo.FilterWithDeps = *b.FilterWithDeps
+	}
+	if b.DownloadInstaller != nil {
+		repo.DownloadInstaller = *b.DownloadInstaller
+	}
+	if b.DownloadSources != nil {
+		repo.DownloadSources = *b.DownloadSources
+	}
+	if b.DownloadUdebs != nil {
+		repo.DownloadUdebs = *b.DownloadUdebs
+	}
+	if b.ArchiveURL != nil && *b.ArchiveURL != repo.ArchiveRoot {
+		repo.SetArchiveRoot(*b.ArchiveURL)
+		fetchMirror = true
+	}
+	if b.Architectures != nil {
+		uniqueArchitectures := uniqueStrings(*b.Architectures)
+		if !stringSlicesEqual(uniqueArchitectures, uniqueStrings(repo.Architectures)) {
+			repo.Architectures = uniqueArchitectures
+			fetchMirror = true
+		}
+	}
+	if b.IgnoreSignatures != nil {
+		ignoreSignatures = *b.IgnoreSignatures
+	}
+
+	if repo.IsFlat() && repo.DownloadUdebs {
+		AbortWithJSONError(c, 400, fmt.Errorf("unable to edit: flat mirrors don't support udebs"))
+		return
+	}
+
+	if fetchMirror {
+		verifier, err := getVerifier(b.Keyrings)
+		if err != nil {
+			AbortWithJSONError(c, 500, fmt.Errorf("unable to initialize GPG verifier: %s", err))
+			return
+		}
+
+		err = repo.Fetch(context.Downloader(), verifier, ignoreSignatures)
+		if err != nil {
+			AbortWithJSONError(c, 500, fmt.Errorf("unable to edit: %s", err))
+			return
+		}
+	}
+
+	err = collection.Update(repo)
+	if err != nil {
+		AbortWithJSONError(c, 500, fmt.Errorf("unable to edit: %s", err))
+		return
+	}
+
+	c.JSON(200, repo)
 }
 
 type mirrorUpdateParams struct {
