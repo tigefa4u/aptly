@@ -115,7 +115,7 @@ func (s *PublishedRepoSuite) SetUpTest(c *C) {
 
 	s.reflist = NewPackageRefListFromPackageList(s.list)
 
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	repo.packageRefs = s.reflist
 	_ = s.factory.RemoteRepoCollection().Add(repo)
 

@@ -59,7 +59,7 @@ func (s *PackageSuite) TestNewUdebFromPara(c *C) {
 }
 
 func (s *PackageSuite) TestNewInstallerFromPara(c *C) {
-	repo, _ := NewRemoteRepo("yandex", "http://example.com/debian", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://example.com/debian", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	downloader := http.NewFakeDownloader()
 	downloader.ExpectResponse("http://example.com/debian/dists/squeeze/main/installer-i386/current/images/MANIFEST.udebs", "MANIFEST.udebs")
 	downloader.ExpectResponse("http://example.com/debian/dists/squeeze/main/installer-i386/current/images/udeb.list", "udeb.list")
