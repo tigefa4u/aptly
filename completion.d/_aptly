@@ -185,6 +185,7 @@ local keyring="*-keyring=[gpg keyring to use when verifying Release file (could 
                             $keyring \
                             "-with-sources=[download source packages in addition to binary packages]:$bool" \
                             "-with-udebs=[download .udeb packages (Debian installer support)]:$bool" \
+                            "-with-appstream=[download AppStream (DEP-11) metadata]:$bool" \
                             "(-)2:new mirror name: " ":archive url:_urls" ":distribution:($dists)" "*:components:_values -s ' ' components $components"
                         ;;
                     list)
@@ -224,6 +225,7 @@ local keyring="*-keyring=[gpg keyring to use when verifying Release file (could 
                             "-filter-with-deps=[when filtering, include dependencies of matching packages as well]:$bool" \
                             "-with-sources=[download source packages in addition to binary packages]:$bool" \
                             "-with-udebs=[download .udeb packages (Debian installer support)]:$bool" \
+                            "-with-appstream=[download AppStream (DEP-11) metadata]:$bool" \
                             "(-)2:mirror name:$mirrors"
                         ;;
                     search)
