@@ -20,6 +20,7 @@ func aptlyMirrorCreate(cmd *commander.Command, args []string) error {
 	downloadSources := LookupOption(context.Config().DownloadSourcePackages, context.Flags(), "with-sources")
 	downloadUdebs := context.Flags().Lookup("with-udebs").Value.Get().(bool)
 	downloadInstaller := context.Flags().Lookup("with-installer").Value.Get().(bool)
+	downloadAppStream := context.Flags().Lookup("with-appstream").Value.Get().(bool)
 	ignoreSignatures := context.Config().GpgDisableVerify
 	if context.Flags().IsSet("ignore-signatures") {
 		ignoreSignatures = context.Flags().Lookup("ignore-signatures").Value.Get().(bool)
@@ -41,7 +42,7 @@ func aptlyMirrorCreate(cmd *commander.Command, args []string) error {
 	}
 
 	repo, err := deb.NewRemoteRepo(mirrorName, archiveURL, distribution, components, context.ArchitecturesList(),
-		downloadSources, downloadUdebs, downloadInstaller)
+		downloadSources, downloadUdebs, downloadInstaller, downloadAppStream)
 	if err != nil {
 		return fmt.Errorf("unable to create mirror: %s", err)
 	}
@@ -100,6 +101,7 @@ Example:
 	}
 
 	cmd.Flag.Bool("ignore-signatures", false, "disable verification of Release file signatures")
+	cmd.Flag.Bool("with-appstream", false, "download AppStream (DEP-11) metadata")
 	cmd.Flag.Bool("with-installer", false, "download additional not packaged installer files")
 	cmd.Flag.Bool("with-sources", false, "download source packages in addition to binary packages")
 	cmd.Flag.Bool("with-udebs", false, "download .udeb packages (Debian installer support)")

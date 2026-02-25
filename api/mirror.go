@@ -102,6 +102,8 @@ type mirrorCreateParams struct {
 	DownloadUdebs bool `                     json:"DownloadUdebs"`
 	// Set "true" to mirror installer files
 	DownloadInstaller bool `                 json:"DownloadInstaller"`
+	// Set "true" to mirror AppStream (DEP-11) metadata
+	DownloadAppStream bool `                 json:"DownloadAppStream"`
 	// Set "true" to include dependencies of matching packages when filtering
 	FilterWithDeps bool `                    json:"FilterWithDeps"`
 	// Set "true" to skip if the given components are in the Release file
@@ -153,7 +155,7 @@ func apiMirrorsCreate(c *gin.Context) {
 	}
 
 	repo, err := deb.NewRemoteRepo(b.Name, b.ArchiveURL, b.Distribution, b.Components, b.Architectures,
-		b.DownloadSources, b.DownloadUdebs, b.DownloadInstaller)
+		b.DownloadSources, b.DownloadUdebs, b.DownloadInstaller, b.DownloadAppStream)
 
 	if err != nil {
 		AbortWithJSONError(c, 400, fmt.Errorf("unable to create mirror: %s", err))
@@ -571,6 +573,14 @@ func apiMirrorsUpdate(c *gin.Context) {
 		err = remote.DownloadPackageIndexes(out, downloader, verifier, collectionFactory, b.IgnoreSignatures, remote.SkipComponentCheck)
 		if err != nil {
 			return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
+		}
+
+		if remote.DownloadAppStream && !remote.IsFlat() {
+			err = remote.DownloadAppStreamFiles(out, downloader,
+				context.PackagePool(), collectionFactory.ChecksumCollection(nil), b.IgnoreChecksums)
+			if err != nil {
+				return &task.ProcessReturnValue{Code: http.StatusInternalServerError, Value: nil}, fmt.Errorf("unable to update: %s", err)
+			}
 		}
 
 		if remote.Filter != "" {

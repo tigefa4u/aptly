@@ -1055,6 +1055,38 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 			}
 		}
 
+		// Pass-through AppStream (DEP-11) files from snapshots
+		for component, item := range p.sourceItems {
+			if item.snapshot == nil || len(item.snapshot.AppStreamFiles) == 0 {
+				continue
+			}
+
+			prefix := component + "/"
+			for relPath, poolPath := range item.snapshot.AppStreamFiles {
+				if !strings.HasPrefix(relPath, prefix) {
+					continue
+				}
+				withinComponent := strings.TrimPrefix(relPath, prefix)
+
+				poolFile, err := packagePool.Open(poolPath)
+				if err != nil {
+					return fmt.Errorf("unable to open AppStream file from pool: %v", err)
+				}
+
+				bufWriter, err := indexes.SkelIndex(component, withinComponent).BufWriter()
+				if err != nil {
+					poolFile.Close()
+					return fmt.Errorf("unable to generate AppStream index: %v", err)
+				}
+
+				_, err = bufio.NewReader(poolFile).WriteTo(bufWriter)
+				poolFile.Close()
+				if err != nil {
+					return fmt.Errorf("unable to write AppStream file: %v", err)
+				}
+			}
+		}
+
 		udebs := []bool{false}
 		if hadUdebs {
 			udebs = append(udebs, true)
