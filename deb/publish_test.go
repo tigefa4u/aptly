@@ -13,6 +13,7 @@ import (
 	"github.com/aptly-dev/aptly/database"
 	"github.com/aptly-dev/aptly/database/goleveldb"
 	"github.com/aptly-dev/aptly/files"
+	"github.com/aptly-dev/aptly/utils"
 	"github.com/ugorji/go/codec"
 
 	. "gopkg.in/check.v1"
@@ -423,6 +424,41 @@ func (s *PublishedRepoSuite) TestPublish(c *C) {
 
 	_, err = os.Stat(filepath.Join(s.publishedStorage.PublicPath(), "ppa/pool/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb"))
 	c.Assert(err, IsNil)
+}
+
+func (s *PublishedRepoSuite) TestPublishAppStream(c *C) {
+	appstreamContent := []byte("DEP-11 test content for Components-amd64.yml.gz")
+	tmpFile := filepath.Join(c.MkDir(), "Components-amd64.yml.gz")
+	c.Assert(os.WriteFile(tmpFile, appstreamContent, 0644), IsNil)
+
+	checksums := utils.ChecksumInfo{Size: int64(len(appstreamContent))}
+	poolPath, err := s.packagePool.Import(tmpFile, "Components-amd64.yml.gz", &checksums, false, s.cs)
+	c.Assert(err, IsNil)
+
+	s.snapshot.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz": poolPath,
+	}
+
+	err = s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
+	c.Assert(err, IsNil)
+
+	appstreamPath := filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/main/dep11/Components-amd64.yml.gz")
+	c.Check(appstreamPath, PathExists)
+
+	actualContent, err := os.ReadFile(appstreamPath)
+	c.Assert(err, IsNil)
+	c.Check(actualContent, DeepEquals, appstreamContent)
+
+	rf, err := os.Open(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
+	c.Assert(err, IsNil)
+	defer rf.Close()
+
+	cfr := NewControlFileReader(rf, true, false)
+	st, err := cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["MD5Sum"], Matches, "(?s).*main/dep11/Components-amd64\\.yml\\.gz.*")
+	c.Check(st["SHA256"], Matches, "(?s).*main/dep11/Components-amd64\\.yml\\.gz.*")
 }
 
 func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {

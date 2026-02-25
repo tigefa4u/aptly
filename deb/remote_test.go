@@ -135,6 +135,44 @@ func (s *RemoteRepoSuite) TestString(c *C) {
 	s.flat.DownloadSources = true
 	c.Check(s.repo.String(), Equals, "[yandex]: http://mirror.yandex.ru/debian/ squeeze [src] [udeb] [installer]")
 	c.Check(s.flat.String(), Equals, "[exp42]: http://repos.express42.com/virool/precise/ ./ [src]")
+
+	s.repo.DownloadAppStream = true
+	c.Check(s.repo.String(), Equals, "[yandex]: http://mirror.yandex.ru/debian/ squeeze [src] [udeb] [installer] [appstream]")
+
+	s.flat.DownloadAppStream = true
+	c.Check(s.flat.String(), Equals, "[exp42]: http://repos.express42.com/virool/precise/ ./ [src] [appstream]")
+}
+
+func (s *RemoteRepoSuite) TestAppStreamPaths(c *C) {
+	s.repo.ReleaseFiles = nil
+	c.Check(s.repo.AppStreamPaths("main"), DeepEquals, []string(nil))
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/binary-amd64/Packages":              {Size: 100},
+		"main/dep11/Components-amd64.yml.gz":       {Size: 200},
+		"main/dep11/Components-i386.yml.gz":         {Size: 300},
+		"main/dep11/icons-48x48.tar.gz":             {Size: 400},
+		"contrib/dep11/Components-amd64.yml.gz":     {Size: 500},
+		"main/source/Sources":                       {Size: 600},
+	}
+
+	paths := s.repo.AppStreamPaths("main")
+	c.Check(paths, DeepEquals, []string{
+		"main/dep11/Components-amd64.yml.gz",
+		"main/dep11/Components-i386.yml.gz",
+		"main/dep11/icons-48x48.tar.gz",
+	})
+
+	paths = s.repo.AppStreamPaths("contrib")
+	c.Check(paths, DeepEquals, []string{
+		"contrib/dep11/Components-amd64.yml.gz",
+	})
+
+	paths = s.repo.AppStreamPaths("non-free")
+	c.Check(paths, DeepEquals, []string(nil))
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{}
+	c.Check(s.repo.AppStreamPaths("main"), DeepEquals, []string(nil))
 }
 
 func (s *RemoteRepoSuite) TestNumPackages(c *C) {
