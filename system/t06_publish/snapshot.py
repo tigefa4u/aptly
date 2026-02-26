@@ -1439,3 +1439,24 @@ class PublishSnapshot43Test(BaseTest):
 
         self.check_file_contents(
             'public/dists/maverick/Release', 'release', match_prepare=strip_processor)
+
+
+class PublishSnapshot44Test(BaseTest):
+    """
+    publish snapshot: mirror with appstream
+    """
+    fixtureWebServer = "../t04_mirror/test_release2"
+    fixtureGpg = True
+    fixtureCmds = [
+        "aptly mirror create --ignore-signatures -with-appstream -architectures=amd64 appstream-test ${url} hardy main",
+        "aptly mirror update -ignore-checksums --ignore-signatures appstream-test",
+        "aptly snapshot create snap-appstream from mirror appstream-test",
+    ]
+    runCmd = "aptly publish snapshot -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec snap-appstream"
+    gold_processor = BaseTest.expand_environ
+    configOverride = {"downloadRetries": 0}
+
+    def check(self):
+        super(PublishSnapshot44Test, self).check()
+        self.check_exists('public/dists/hardy/main/dep11/Components-amd64.yml.gz')
+        self.check_exists('public/dists/hardy/main/dep11/icons-48x48.tar.gz')
