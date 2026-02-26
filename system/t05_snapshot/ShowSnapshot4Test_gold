@@ -34,7 +34,8 @@
       "SkipArchitectureCheck": false,
       "DownloadSources": false,
       "DownloadUdebs": false,
-      "DownloadInstaller": false
+      "DownloadInstaller": false,
+      "DownloadAppStream": false
     }
   ],
   "Description": "Snapshot from mirror [wheezy-non-free]: http://mirror.yandex.ru/debian/ wheezy",
