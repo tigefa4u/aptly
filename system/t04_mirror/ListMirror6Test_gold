@@ -42,7 +42,8 @@
     "SkipArchitectureCheck": false,
     "DownloadSources": false,
     "DownloadUdebs": false,
-    "DownloadInstaller": false
+    "DownloadInstaller": false,
+    "DownloadAppStream": false
   },
   {
     "Name": "mirror2",
@@ -85,7 +86,8 @@
     "SkipArchitectureCheck": false,
     "DownloadSources": true,
     "DownloadUdebs": false,
-    "DownloadInstaller": false
+    "DownloadInstaller": false,
+    "DownloadAppStream": false
   },
   {
     "Name": "mirror3",
@@ -119,7 +121,8 @@
     "SkipArchitectureCheck": false,
     "DownloadSources": false,
     "DownloadUdebs": false,
-    "DownloadInstaller": false
+    "DownloadInstaller": false,
+    "DownloadAppStream": false
   },
   {
     "Name": "mirror4",
@@ -148,6 +151,7 @@
     "SkipArchitectureCheck": false,
     "DownloadSources": false,
     "DownloadUdebs": false,
-    "DownloadInstaller": false
+    "DownloadInstaller": false,
+    "DownloadAppStream": false
   }
 ]

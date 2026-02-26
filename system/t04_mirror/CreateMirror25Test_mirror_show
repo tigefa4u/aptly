@@ -5,6 +5,7 @@ Components: main, contrib, non-free
 Architectures: i386
 Download Sources: no
 Download .udebs: yes
+Download AppStream: no
 Last update: never
 
 Information from release file:

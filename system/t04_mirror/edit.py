@@ -114,3 +114,16 @@ class EditMirror10Test(BaseTest):
     """
     fixtureCmds = ["aptly mirror create -ignore-signatures mirror10 http://repo.aptly.info/system-tests/ftp.ru.debian.org/debian bookworm main"]
     runCmd = "aptly mirror edit -ignore-signatures -archive-url http://repo.aptly.info/system-tests/ftp.ch.debian.org/debian mirror10"
+
+
+class EditMirror11Test(BaseTest):
+    """
+    edit mirror: enable appstream
+    """
+    fixtureDB = True
+    runCmd = "aptly mirror edit -with-appstream wheezy-main"
+
+    def check(self):
+        self.check_output()
+        self.check_cmd_output("aptly mirror show wheezy-main", "mirror_show",
+                              match_prepare=lambda s: re.sub(r"Last update: [0-9:+A-Za-z -]+\n", "", s))

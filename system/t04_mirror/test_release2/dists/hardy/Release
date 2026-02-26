@@ -9,3 +9,11 @@ Components: main
 Description: Debian 6.0.8 Released 19 October 2013
 MD5Sum:
  846549680001f5c632b6ee8e0f183825        827 main/binary-amd64/Packages
+ f72bdc4905a2d68a7a4b85544a7135c3         92 main/dep11/Components-amd64.yml.gz
+ 26dce1ff9274a848f1633737936044ed        170 main/dep11/icons-48x48.tar.gz
+SHA1:
+ 2a4d420955106ebf1765153341ba4581680f62ce         92 main/dep11/Components-amd64.yml.gz
+ 2f14d886f1e798b899184e7ff1ef2d2f27cd59df        170 main/dep11/icons-48x48.tar.gz
+SHA256:
+ 1245da5002d7e96c3b3133671e9267f69eea41ee4e3f3b8a0dcb6df15e5b51b7         92 main/dep11/Components-amd64.yml.gz
+ bdd3f75f27c2eaf78e074142ee2270809d5f16b26cc64c60df7cb38ae0f38516        170 main/dep11/icons-48x48.tar.gz

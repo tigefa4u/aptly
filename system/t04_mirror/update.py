@@ -482,3 +482,23 @@ class UpdateMirror27Test(BaseTest):
     runCmd = "aptly mirror update -downloader=grab -keyring=aptlytest.gpg grab-fail"
     outputMatchPrepare = filterOutRedirects
     expectedCode = 1
+
+
+class UpdateMirror28Test(BaseTest):
+    """
+    update mirrors: update with appstream
+    """
+    fixtureCmds = [
+        "aptly mirror create --ignore-signatures -with-appstream appstream-test ${url} hardy main",
+    ]
+    fixtureWebServer = "test_release2"
+    configOverride = {"downloadRetries": 0}
+    runCmd = "aptly mirror update -ignore-checksums --ignore-signatures appstream-test"
+
+    def gold_processor(self, gold):
+        return string.Template(gold).substitute({'url': self.webServerUrl})
+
+    def check(self):
+        self.check_output()
+        self.check_cmd_output("aptly mirror show appstream-test", "mirror_show",
+                              match_prepare=lambda s: re.sub(r"Last update: [0-9:+A-Za-z -]+\n", "", s))

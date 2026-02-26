@@ -1,0 +1,21 @@
+Name: appstream-test
+Archive Root URL: ${url}
+Distribution: hardy
+Components: main
+Architectures: amd64
+Download Sources: no
+Download .udebs: no
+Download AppStream: yes
+Number of packages: 1
+
+Information from release file:
+Architectures: amd64
+Codename: hardy
+Components: main
+Date: Sat, 19 Oct 2013 13:54:21 UTC
+Description:  Debian 6.0.8 Released 19 October 2013
+
+Label: failure
+Origin: test
+Suite: test
+Version: 6.0.8
