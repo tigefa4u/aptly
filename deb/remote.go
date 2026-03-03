@@ -116,6 +116,9 @@ func NewRemoteRepo(name string, archiveRoot string, distribution string, compone
 		if result.DownloadUdebs {
 			return nil, fmt.Errorf("debian-installer udebs aren't supported for flat repos")
 		}
+		if result.DownloadAppStream {
+			return nil, fmt.Errorf("AppStream (DEP-11) metadata isn't supported for flat repos")
+		}
 		result.Components = nil
 	}
 

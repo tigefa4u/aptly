@@ -55,6 +55,10 @@ func aptlyMirrorEdit(cmd *commander.Command, args []string) error {
 		return fmt.Errorf("unable to edit: flat mirrors don't support udebs")
 	}
 
+	if repo.IsFlat() && repo.DownloadAppStream {
+		return fmt.Errorf("unable to edit: flat mirrors don't support AppStream (DEP-11) metadata")
+	}
+
 	if repo.Filter != "" {
 		_, err = query.Parse(repo.Filter)
 		if err != nil {

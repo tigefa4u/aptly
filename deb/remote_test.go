@@ -123,6 +123,9 @@ func (s *RemoteRepoSuite) TestFlatCreation(c *C) {
 
 	_, err := NewRemoteRepo("fl", "http://some.repo/", "./", []string{"main"}, []string{}, false, false, false, false)
 	c.Check(err, ErrorMatches, "components aren't supported for flat repos")
+
+	_, err = NewRemoteRepo("fl", "http://some.repo/", "./", []string{}, []string{}, false, false, false, true)
+	c.Check(err, ErrorMatches, "AppStream \\(DEP-11\\) metadata isn't supported for flat repos")
 }
 
 func (s *RemoteRepoSuite) TestString(c *C) {
@@ -139,8 +142,7 @@ func (s *RemoteRepoSuite) TestString(c *C) {
 	s.repo.DownloadAppStream = true
 	c.Check(s.repo.String(), Equals, "[yandex]: http://mirror.yandex.ru/debian/ squeeze [src] [udeb] [installer] [appstream]")
 
-	s.flat.DownloadAppStream = true
-	c.Check(s.flat.String(), Equals, "[exp42]: http://repos.express42.com/virool/precise/ ./ [src] [appstream]")
+	// AppStream is not supported for flat repos, so no flat test here
 }
 
 func (s *RemoteRepoSuite) TestAppStreamPaths(c *C) {
