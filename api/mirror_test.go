@@ -26,6 +26,21 @@ func (s *MirrorSuite) TestDeleteMirrorNonExisting(c *C) {
 	c.Check(response.Body.String(), Equals, "{\"error\":\"unable to drop: mirror with name does-not-exist not found\"}")
 }
 
+func (s *MirrorSuite) TestCreateMirrorFlatWithAppStream(c *C) {
+	body, err := json.Marshal(gin.H{
+		"Name":              "test-flat-appstream",
+		"ArchiveURL":        "http://example.com/repo/",
+		"Distribution":      "./",
+		"DownloadAppStream":  true,
+	})
+	c.Assert(err, IsNil)
+
+	response, err := s.HTTPRequest("POST", "/api/mirrors", bytes.NewReader(body))
+	c.Assert(err, IsNil)
+	c.Check(response.Code, Equals, 400)
+	c.Check(response.Body.String(), Matches, ".*AppStream.*flat.*")
+}
+
 func (s *MirrorSuite) TestCreateMirror(c *C) {
 	c.ExpectFailure("Need to mock downloads")
 	body, err := json.Marshal(gin.H{

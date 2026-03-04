@@ -2,6 +2,7 @@ package deb
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -722,6 +723,74 @@ func (s *RemoteRepoSuite) TestDownloadWithSourcesFlat(c *C) {
 
 	_ = s.flat.FinalizeDownload(s.collectionFactory, nil)
 	c.Assert(s.flat.packageRefs, NotNil)
+}
+
+func (s *RemoteRepoSuite) TestDownloadAppStreamFiles(c *C) {
+	// No dep11 entries
+	s.repo.Components = []string{"main"}
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/binary-amd64/Packages": {Size: 100},
+		"main/source/Sources":        {Size: 200},
+	}
+
+	err := s.repo.DownloadAppStreamFiles(s.progress, s.downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 0)
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 16},
+		"main/dep11/icons-48x48.tar.gz":      {Size: 16},
+		"main/binary-amd64/Packages":          {Size: 100},
+	}
+
+	downloader := http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz", "dep11-icons-data")
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 2)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
+	c.Check(s.repo.AppStreamFiles["main/dep11/icons-48x48.tar.gz"], Not(Equals), "")
+
+	// 404 skipped
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 16},
+		"main/dep11/icons-48x48.tar.gz":      {Size: 15},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+	downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz", &http.Error{Code: 404, URL: "http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz"})
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 1)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
+
+	// Generic download error propagated
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 18},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", fmt.Errorf("connection refused"))
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, ErrorMatches, "unable to download AppStream file.*connection refused")
+
+	// Bypass checksum validation
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 999, MD5: "bad", SHA256: "bad"},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, true)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 1)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
 }
 
 type RemoteRepoCollectionSuite struct {
