@@ -218,6 +218,8 @@ func apiGPGDeleteKey(c *gin.Context) {
 	args := []string{
 		"--no-default-keyring",
 		"--allow-non-selfsigned-uid",
+		"--batch",
+		"--yes",
 	}
 
 	keyring := "trustedkeys.gpg"
