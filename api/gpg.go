@@ -13,11 +13,6 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type gpgListKeysParams struct {
-	// Keyring to list keys from (default: trustedkeys.gpg)
-	Keyring string `json:"Keyring"         example:"trustedkeys.gpg"`
-}
-
 type gpgKeyInfo struct {
 	// 16-character key ID (short form)
 	KeyID string `json:"KeyID"         example:"8B48AD6246925553"`
