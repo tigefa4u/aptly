@@ -1,10 +1,9 @@
 package api
 
 import (
-	"bytes"
 	"encoding/json"
 
-	"github.com/gin-gonic/gin"
+	"github.com/aptly-dev/aptly/deb"
 	. "gopkg.in/check.v1"
 )
 
@@ -15,14 +14,11 @@ type SnapshotsSuite struct {
 var _ = Suite(&SnapshotsSuite{})
 
 func (s *SnapshotsSuite) TestGetSnapshotsIncludesNumPackages(c *C) {
-	body, err := json.Marshal(gin.H{"Name": "count-snapshot-list"})
-	c.Assert(err, IsNil)
+	collection := s.context.NewCollectionFactory().SnapshotCollection()
+	snapshot := deb.NewSnapshotFromRefList("count-snapshot-list", nil, makePackageRefList(c), "")
+	c.Assert(collection.Add(snapshot), IsNil)
 
-	response, err := s.HTTPRequest("POST", "/api/snapshots", bytes.NewReader(body))
-	c.Assert(err, IsNil)
-	c.Assert(response.Code, Equals, 201)
-
-	response, err = s.HTTPRequest("GET", "/api/snapshots", nil)
+	response, err := s.HTTPRequest("GET", "/api/snapshots", nil)
 	c.Assert(err, IsNil)
 	c.Assert(response.Code, Equals, 200)
 
@@ -36,10 +32,22 @@ func (s *SnapshotsSuite) TestGetSnapshotsIncludesNumPackages(c *C) {
 			found = true
 			value, ok := snapshot["NumPackages"]
 			c.Assert(ok, Equals, true)
-			c.Assert(value, Equals, float64(0))
+			c.Assert(value, Equals, float64(2))
 			break
 		}
 	}
 
 	c.Assert(found, Equals, true)
+}
+
+func (s *SnapshotsSuite) TestGetSnapshotsReturns500OnCorruptRefList(c *C) {
+	collection := s.context.NewCollectionFactory().SnapshotCollection()
+	snapshot := deb.NewSnapshotFromRefList("broken-snapshot-list", nil, makePackageRefList(c), "")
+	c.Assert(collection.Add(snapshot), IsNil)
+	putRawDBValue(c, &s.APISuite, snapshot.RefKey(), []byte("not-msgpack"))
+
+	response, err := s.HTTPRequest("GET", "/api/snapshots", nil)
+	c.Assert(err, IsNil)
+	c.Assert(response.Code, Equals, 500)
+	c.Assert(response.Body.String(), Matches, ".*msgpack.*|.*decode.*")
 }

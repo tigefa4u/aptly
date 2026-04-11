@@ -66,6 +66,7 @@ func (s *MirrorSuite) TestGetMirrorsIncludesNumPackages(c *C) {
 
 	err = collection.Add(repo)
 	c.Assert(err, IsNil)
+	putRawDBValue(c, &s.APISuite, repo.RefKey(), makePackageRefList(c).Encode())
 
 	response, err := s.HTTPRequest("GET", "/api/mirrors", nil)
 	c.Assert(err, IsNil)
@@ -81,10 +82,24 @@ func (s *MirrorSuite) TestGetMirrorsIncludesNumPackages(c *C) {
 			found = true
 			value, ok := mirror["NumPackages"]
 			c.Assert(ok, Equals, true)
-			c.Assert(value, Equals, float64(0))
+			c.Assert(value, Equals, float64(2))
 			break
 		}
 	}
 
 	c.Assert(found, Equals, true)
+}
+
+func (s *MirrorSuite) TestGetMirrorsReturns500OnCorruptRefList(c *C) {
+	collection := s.context.NewCollectionFactory().RemoteRepoCollection()
+
+	repo, err := deb.NewRemoteRepo("broken-mirror", "http://example.com/debian", "stable", []string{"main"}, []string{}, false, false, false)
+	c.Assert(err, IsNil)
+	c.Assert(collection.Add(repo), IsNil)
+	putRawDBValue(c, &s.APISuite, repo.RefKey(), []byte("not-msgpack"))
+
+	response, err := s.HTTPRequest("GET", "/api/mirrors", nil)
+	c.Assert(err, IsNil)
+	c.Assert(response.Code, Equals, 500)
+	c.Assert(response.Body.String(), Matches, ".*unable to show:.*")
 }
