@@ -66,17 +66,26 @@ func uniqueStrings(input []string) []string {
 // @Description Each mirror is returned as in “show” API.
 // @Tags Mirrors
 // @Produce json
-// @Success 200 {array} deb.RemoteRepo
+// @Success 200 {array} remoteRepoResponse
 // @Router /api/mirrors [get]
 func apiMirrorsList(c *gin.Context) {
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.RemoteRepoCollection()
 
-	result := []*deb.RemoteRepo{}
-	_ = collection.ForEach(func(repo *deb.RemoteRepo) error {
-		result = append(result, repo)
+	result := []remoteRepoResponse{}
+	err := collection.ForEach(func(repo *deb.RemoteRepo) error {
+		err := collection.LoadComplete(repo)
+		if err != nil {
+			return err
+		}
+
+		result = append(result, newRemoteRepoResponse(repo))
 		return nil
 	})
+	if err != nil {
+		AbortWithJSONError(c, 500, fmt.Errorf("unable to show: %s", err))
+		return
+	}
 
 	c.JSON(200, result)
 }
@@ -264,6 +273,7 @@ func apiMirrorsShow(c *gin.Context) {
 	err = collection.LoadComplete(repo)
 	if err != nil {
 		AbortWithJSONError(c, 500, fmt.Errorf("unable to show: %s", err))
+		return
 	}
 
 	c.JSON(200, repo)
