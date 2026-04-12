@@ -48,6 +48,7 @@ class PublishAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -94,6 +95,7 @@ class PublishAPITestRepo(APITest):
             'Distribution': distribution,
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': './' + distribution,
@@ -166,6 +168,7 @@ class PublishAPITestRepoMultiDist(APITest):
             'Distribution': 'bookworm',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'bookworm',
@@ -232,6 +235,7 @@ class PublishAPITestRepoSignedBy(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -283,6 +287,7 @@ class PublishSnapshotAPITest(APITest):
                 "ButAutomaticUpgrades": "yes",
                 "Origin": "earth",
                 "Label": "fun",
+                "Version": "13.3",
             }
         )
         self.check_task(task)
@@ -299,6 +304,7 @@ class PublishSnapshotAPITest(APITest):
             'Distribution': 'squeeze',
             'Label': 'fun',
             'Origin': 'earth',
+            "Version": "13.3",
             'MultiDist': False,
             'NotAutomatic': 'yes',
             'ButAutomaticUpgrades': 'yes',
@@ -377,6 +383,7 @@ class PublishSnapshotAPITestSignedBy(APITest):
             'Distribution': 'squeeze',
             'Label': 'fun',
             'Origin': 'earth',
+            'Version': '',
             'MultiDist': False,
             'NotAutomatic': 'yes',
             'ButAutomaticUpgrades': 'yes',
@@ -441,12 +448,13 @@ class PublishUpdateAPITestRepo(APITest):
                                 json={"PackageRefs": ['Psource pyspi 0.6.1-1.4 f8f1daa806004e89']})
         self.check_task(task)
 
-        # Update and switch AcquireByHash on.
+        # Update and switch AcquireByHash on, Version.
         task = self.put_task(
             "/api/publish/" + prefix + "/wheezy",
             json={
                 "AcquireByHash": True,
                 "Signing": DefaultSigningOptions,
+                "Version": "13.3"
             }
         )
         self.check_task(task)
@@ -457,6 +465,7 @@ class PublishUpdateAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '13.3',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -549,6 +558,7 @@ class PublishUpdateAPITestRepoSignedBy(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -629,6 +639,7 @@ class PublishUpdateAPIMultiDist(APITest):
             'Distribution': 'bookworm',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'bookworm',
@@ -731,6 +742,7 @@ class PublishConcurrentUpdateAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -830,6 +842,7 @@ class PublishUpdateSkipCleanupAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -901,6 +914,7 @@ class PublishSwitchAPITestRepo(APITest):
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Origin': '',
+            'Version': '',
             'Path': prefix + '/' + 'wheezy',
             'Prefix': prefix,
             'SignedBy': '',
@@ -941,6 +955,7 @@ class PublishSwitchAPITestRepo(APITest):
                 "SkipContents": True,
                 "Label": "fun",
                 "Origin": "earth",
+                "Version": "13.3",
             })
         self.check_task(task)
         repo_expected = {
@@ -950,6 +965,7 @@ class PublishSwitchAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': 'fun',
             'Origin': 'earth',
+            'Version': '13.3',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -1017,6 +1033,7 @@ class PublishSwitchAPITestRepoSignedBy(APITest):
             'Codename': '',
             'Distribution': 'wheezy',
             'Label': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Origin': '',
@@ -1053,6 +1070,7 @@ class PublishSwitchAPITestRepoSignedBy(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -1113,6 +1131,7 @@ class PublishSwitchAPISkipCleanupTestRepo(APITest):
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Origin': '',
+            'Version': '',
             'Path': prefix + '/' + 'wheezy',
             'Prefix': prefix,
             'SignedBy': '',
@@ -1152,6 +1171,7 @@ class PublishSwitchAPISkipCleanupTestRepo(APITest):
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Origin': '',
+            'Version': '',
             'Path': prefix + '/' + 'otherdist',
             'Prefix': prefix,
             'SignedBy': '',
@@ -1194,6 +1214,7 @@ class PublishSwitchAPISkipCleanupTestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -1258,6 +1279,7 @@ class PublishShowAPITestRepo(APITest):
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Origin': '',
+            'Version': '',
             'Path': prefix + '/' + 'wheezy',
             'Prefix': prefix,
             'SignedBy': '',
@@ -1850,6 +1872,7 @@ class PublishUpdateSourcesAPITestRepo(APITest):
                 "SkipContents": True,
                 "Label": "fun",
                 "Origin": "earth",
+                "Version": "13.3",
             }
         ).status_code, 200)
 
@@ -1860,6 +1883,7 @@ class PublishUpdateSourcesAPITestRepo(APITest):
             'Distribution': 'wheezy',
             'Label': 'fun',
             'Origin': 'earth',
+            'Version': '13.3',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',
@@ -1915,6 +1939,7 @@ class PublishAPITestDualSignature(APITest):
             'Distribution': 'wheezy',
             'Label': '',
             'Origin': '',
+            'Version': '',
             'NotAutomatic': '',
             'ButAutomaticUpgrades': '',
             'Path': prefix + '/' + 'wheezy',

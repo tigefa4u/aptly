@@ -1005,3 +1005,22 @@ class PublishRepo36Test(BaseTest):
         # verify byte-identical output
         second_release = self.read_file('public/dists/maverick/Release')
         self.check_equal(first_release, second_release)
+
+
+class PublishRepo37Test(BaseTest):
+    """
+    publish repo: custom version
+    """
+    fixtureCmds = [
+        "aptly repo create local-repo",
+        "aptly repo add local-repo ${files}",
+    ]
+    runCmd = "aptly publish repo -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -distribution=maverick -component=contrib -label=label37 -version=13.3 local-repo"
+    gold_processor = BaseTest.expand_environ
+
+    def check(self):
+        super(PublishRepo37Test, self).check()
+
+        # verify contents except of sums
+        self.check_file_contents(
+            'public/dists/maverick/Release', 'release', match_prepare=strip_processor)

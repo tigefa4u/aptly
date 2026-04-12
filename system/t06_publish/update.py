@@ -629,7 +629,7 @@ class PublishUpdate19Test(BaseTest):
 
 class PublishUpdate20Test(BaseTest):
     """
-    publish update: update label and origin
+    publish update: update label, origin, version
     """
     fixtureCmds = [
         "aptly repo create local-repo",
@@ -637,11 +637,33 @@ class PublishUpdate20Test(BaseTest):
         "aptly publish repo -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -distribution=maverick -skip-bz2 local-repo",
         "aptly repo remove local-repo pyspi"
     ]
-    runCmd = "aptly publish update -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -label=fun -origin=earth maverick"
+    runCmd = "aptly publish update -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -label=fun -origin=earth -version=13.3 maverick"
     gold_processor = BaseTest.expand_environ
 
     def check(self):
         super(PublishUpdate20Test, self).check()
+
+        self.check_exists('public/dists/maverick/InRelease')
+
+        # verify contents except of sums
+        self.check_file_contents('public/dists/maverick/Release', 'release', match_prepare=strip_processor)
+
+
+class PublishUpdate21Test(BaseTest):
+    """
+    publish update: update version with empty value
+    """
+    fixtureCmds = [
+        "aptly repo create local-repo",
+        "aptly repo add local-repo ${files}/",
+        "aptly publish repo -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -distribution=maverick -skip-bz2 -version=13.3 local-repo",
+        "aptly repo remove local-repo pyspi"
+    ]
+    runCmd = "aptly publish update -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -version='' maverick"
+    gold_processor = BaseTest.expand_environ
+
+    def check(self):
+        super(PublishUpdate21Test, self).check()
 
         self.check_exists('public/dists/maverick/InRelease')
 

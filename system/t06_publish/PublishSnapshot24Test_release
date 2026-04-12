@@ -1,6 +1,7 @@
 Origin: aptly24
 Label: . squeeze
 Suite: squeeze
+Version: 13.3
 Codename: squeeze
 NotAutomatic: yes
 ButAutomaticUpgrades: yes

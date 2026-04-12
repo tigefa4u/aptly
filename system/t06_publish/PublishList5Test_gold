@@ -24,7 +24,8 @@
       }
     ],
     "Storage": "",
-    "Suite": ""
+    "Suite": "",
+    "Version": ""
   },
   {
     "AcquireByHash": false,
@@ -50,7 +51,8 @@
       }
     ],
     "Storage": "",
-    "Suite": ""
+    "Suite": "",
+    "Version": ""
   },
   {
     "AcquireByHash": false,
@@ -77,7 +79,8 @@
       }
     ],
     "Storage": "",
-    "Suite": ""
+    "Suite": "",
+    "Version": ""
   },
   {
     "AcquireByHash": false,
@@ -104,6 +107,7 @@
       }
     ],
     "Storage": "",
-    "Suite": ""
+    "Suite": "",
+    "Version": ""
   }
 ]

@@ -53,6 +53,7 @@ Example:
 	cmd.Flag.Bool("acquire-by-hash", false, "provide index files by hash")
 	cmd.Flag.String("signed-by", "", "an optional field containing a comma separated list of OpenPGP key fingerprints to be used for validating the next Release file")
 	cmd.Flag.Bool("multi-dist", false, "enable multiple packages with the same filename in different distributions")
+	cmd.Flag.String("version", "", "version of the release")
 
 	return cmd
 }

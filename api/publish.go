@@ -186,6 +186,8 @@ type publishedRepoCreateParams struct {
 	SignedBy *string `                            json:"SignedBy"              example:""`
 	// Enable multiple packages with the same filename in different distributions
 	MultiDist *bool `                             json:"MultiDist"             example:"false"`
+	// Version of the release
+	Version string `                              json:"Version"               example:""`
 }
 
 // @Summary Create Published Repository
@@ -361,6 +363,10 @@ func apiPublishRepoOrSnapshot(c *gin.Context) {
 			published.SignedBy = *b.SignedBy
 		}
 
+		if b.Version != "" {
+			published.Version = b.Version
+		}
+
 		duplicate := collection.CheckDuplicate(published)
 		if duplicate != nil {
 			_ = collectionFactory.PublishedRepoCollection().LoadComplete(duplicate, collectionFactory)
@@ -404,6 +410,8 @@ type publishedRepoUpdateSwitchParams struct {
     Label *string `                               json:"Label"          example:"Debian"`
     // Value of Origin: field in published repository stanza
     Origin *string `                              json:"Origin"         example:"Debian"`
+    // Version of the release: Optional
+    Version *string `                             json:"Version"        example:"13.3"`
 }
 
 // @Summary Update Published Repository
@@ -501,6 +509,10 @@ func apiPublishUpdateSwitch(c *gin.Context) {
 
 	if b.Origin != nil {
 		published.Origin = *b.Origin
+	}
+
+	if b.Version != nil {
+		published.Version = *b.Version
 	}
 
 	resources := []string{string(published.Key())}
@@ -1000,6 +1012,8 @@ type publishedRepoUpdateParams struct {
     Label *string `                               json:"Label"          example:"Debian"`
     // Value of Origin: field in published repository stanza
     Origin *string `                              json:"Origin"         example:"Debian"`
+    // Version of the release: Optional
+    Version *string `                             json:"Version"        example:"13.3"`
 }
 
 // @Summary Update Published Repository
@@ -1078,6 +1092,10 @@ func apiPublishUpdate(c *gin.Context) {
 
 	if b.Origin != nil {
 		published.Origin = *b.Origin
+	}
+
+	if b.Version != nil {
+		published.Version = *b.Version
 	}
 
 	resources := []string{string(published.Key())}

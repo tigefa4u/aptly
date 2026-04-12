@@ -158,6 +158,10 @@ func aptlyPublishSnapshotOrRepo(cmd *commander.Command, args []string) error {
 		published.MultiDist = context.Flags().Lookup("multi-dist").Value.Get().(bool)
 	}
 
+	if context.Flags().IsSet("version") {
+		published.Version = context.Flags().Lookup("version").Value.String()
+	}
+
 	duplicate := collectionFactory.PublishedRepoCollection().CheckDuplicate(published)
 	if duplicate != nil {
 		_ = collectionFactory.PublishedRepoCollection().LoadComplete(duplicate, collectionFactory)
@@ -252,6 +256,7 @@ Example:
 	cmd.Flag.Bool("force-overwrite", false, "overwrite files in package pool in case of mismatch")
 	cmd.Flag.Bool("acquire-by-hash", false, "provide index files by hash")
 	cmd.Flag.String("signed-by", "", "an optional field containing a comma separated list of OpenPGP key fingerprints to be used for validating the next Release file")
+	cmd.Flag.String("version", "", "version of the release")
 	cmd.Flag.Bool("multi-dist", false, "enable multiple packages with the same filename in different distributions")
 
 	return cmd

@@ -76,6 +76,10 @@ func aptlyPublishUpdate(cmd *commander.Command, args []string) error {
 		published.MultiDist = context.Flags().Lookup("multi-dist").Value.Get().(bool)
 	}
 
+	if context.Flags().IsSet("version") {
+		published.Version = context.Flags().Lookup("version").Value.String()
+	}
+
 	err = published.Publish(context.PackagePool(), context, collectionFactory, signer, context.Progress(), forceOverwrite, context.SkelPath())
 	if err != nil {
 		return fmt.Errorf("unable to publish: %s", err)
@@ -142,6 +146,7 @@ Example:
 	cmd.Flag.Bool("multi-dist", false, "enable multiple packages with the same filename in different distributions")
     cmd.Flag.String("origin", "", "overwrite origin name to publish")
     cmd.Flag.String("label", "", "overwrite label to publish")
+    cmd.Flag.String("version", "", "version of the release")
 
 	return cmd
 }

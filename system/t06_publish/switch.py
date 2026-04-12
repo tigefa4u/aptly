@@ -607,7 +607,7 @@ class PublishSwitch16Test(BaseTest):
 
 class PublishSwitch17Test(BaseTest):
     """
-    publish switch: signed-by
+    publish switch: signed-by, version
     """
     fixtureDB = True
     fixturePool = True
@@ -616,7 +616,7 @@ class PublishSwitch17Test(BaseTest):
         "aptly snapshot create snap2 from mirror gnuplot-maverick",
         "aptly publish snapshot -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -distribution=maverick snap1",
     ]
-    runCmd = "aptly publish switch -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -signed-by=a,string maverick snap2"
+    runCmd = "aptly publish switch -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec -signed-by=a,string  -version=13.3 maverick snap2"
     gold_processor = BaseTest.expand_environ
 
     def check(self):
