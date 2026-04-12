@@ -139,6 +139,7 @@ jobs:
           awk 'FNR==1 && NR!=1 {next} {print}' coverage/*.out > coverage.txt
 
       - name: "Upload Code Coverage"
+        if: github.actor != 'dependabot[bot]'
         uses: codecov/codecov-action@v5
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
