@@ -26,6 +26,8 @@ _testmain.go
 *.test
 
 coverage.txt
+coverage.out
+coverage.html
 
 *.pyc
 
