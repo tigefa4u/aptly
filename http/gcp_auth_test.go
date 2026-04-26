@@ -30,7 +30,7 @@ func TestGCPAuthTransport_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -61,7 +61,7 @@ func TestGCPAuthTransport_RoundTrip_with_dummy_tokenSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to make request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func(){ _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
@@ -79,15 +79,15 @@ func TestGCPAuthTransport_RoundTrip_with_InvalidCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp file: %s", err)
 	}
-	defer os.Remove(tmpFile.Name())
+	defer func() { _ = os.Remove(tmpFile.Name()) }()
 	if _, err := tmpFile.WriteString(`{"invalid": "data"}`); err != nil {
 		t.Fatalf("Failed to write to temp file: %s", err)
 	}
-	tmpFile.Close()
+	_ = tmpFile.Close()
 
 	defaultEnv := os.Getenv("GOOGLE_APPLICATION_CREDENTIALS")
-	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", tmpFile.Name())
-	defer os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", defaultEnv)
+	_ = os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", tmpFile.Name())
+	defer func() { _ = os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", defaultEnv) }()
 
 	transport := &gcpRoundTripper{
 		base: http.DefaultTransport,
@@ -98,7 +98,7 @@ func TestGCPAuthTransport_RoundTrip_with_InvalidCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to make request: %s", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Errorf("Expected status 403, got %d", resp.StatusCode)

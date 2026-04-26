@@ -1075,12 +1075,12 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 
 				bufWriter, err := indexes.SkelIndex(component, withinComponent).BufWriter()
 				if err != nil {
-					poolFile.Close()
+					_ = poolFile.Close()
 					return fmt.Errorf("unable to generate AppStream index: %v", err)
 				}
 
 				_, err = bufio.NewReader(poolFile).WriteTo(bufWriter)
-				poolFile.Close()
+				_ = poolFile.Close()
 				if err != nil {
 					return fmt.Errorf("unable to write AppStream file: %v", err)
 				}
@@ -1173,7 +1173,7 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 	release["Label"] = p.GetLabel()
 	release["Suite"] = p.GetSuite()
 	release["Codename"] = p.GetCodename()
-	datetime_format := "Mon, 2 Jan 2006 15:04:05 MST"
+	datetimeformat := "Mon, 2 Jan 2006 15:04:05 MST"
 
 	publishDate := time.Now().UTC()
 	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
@@ -1181,7 +1181,7 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 			publishDate = time.Unix(sec, 0).UTC()
 		}
 	}
-	release["Date"] = publishDate.Format(datetime_format)
+	release["Date"] = publishDate.Format(datetimeformat)
 	release["Architectures"] = strings.Join(utils.StrSlicesSubstract(p.Architectures, []string{ArchitectureSource}), " ")
 	if p.AcquireByHash {
 		release["Acquire-By-Hash"] = "yes"
@@ -1193,7 +1193,7 @@ func (p *PublishedRepo) Publish(packagePool aptly.PackagePool, publishedStorageP
 		// is not present or if it is expired."
 		release["Signed-By"] = p.SignedBy
 		// Let's use a century as a "forever" value.
-		release["Valid-Until"] = publishDate.AddDate(100, 0, 0).Format(datetime_format)
+		release["Valid-Until"] = publishDate.AddDate(100, 0, 0).Format(datetimeformat)
 	}
 	if p.Version != "" {
         release["Version"] = p.Version

@@ -483,7 +483,7 @@ func (s *PublishedRepoSuite) TestPublishAppStream(c *C) {
 	// Release file should reference AppStream files
 	rf, err := os.Open(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
 	c.Assert(err, IsNil)
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	cfr := NewControlFileReader(rf, true, false)
 	st, err := cfr.ReadStanza()
@@ -512,14 +512,14 @@ func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {
 func (s *PublishedRepoSuite) TestPublishSourceDateEpoch(c *C) {
 	// Test with SOURCE_DATE_EPOCH set
 	_ = os.Setenv("SOURCE_DATE_EPOCH", "1234567890")
-	defer os.Unsetenv("SOURCE_DATE_EPOCH")
+	defer func() { _ = os.Unsetenv("SOURCE_DATE_EPOCH") }()
 
 	err := s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
 	c.Assert(err, IsNil)
 
 	rf, err := os.Open(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
 	c.Assert(err, IsNil)
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	cfr := NewControlFileReader(rf, true, false)
 	st, err := cfr.ReadStanza()
@@ -532,14 +532,14 @@ func (s *PublishedRepoSuite) TestPublishSourceDateEpoch(c *C) {
 func (s *PublishedRepoSuite) TestPublishSourceDateEpochInvalid(c *C) {
 	// Test with invalid SOURCE_DATE_EPOCH (should fallback to current time)
 	_ = os.Setenv("SOURCE_DATE_EPOCH", "invalid")
-	defer os.Unsetenv("SOURCE_DATE_EPOCH")
+	defer func() { _ = os.Unsetenv("SOURCE_DATE_EPOCH") }()
 
 	err := s.repo2.Publish(s.packagePool, s.provider, s.factory, nil, nil, false, "")
 	c.Assert(err, IsNil)
 
 	rf, err := os.Open(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/maverick/Release"))
 	c.Assert(err, IsNil)
-	defer rf.Close()
+	defer func() { _ = rf.Close() }()
 
 	cfr := NewControlFileReader(rf, true, false)
 	st, err := cfr.ReadStanza()
