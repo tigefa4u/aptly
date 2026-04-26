@@ -20,7 +20,7 @@ import (
 // @Description Each snapshot is returned as in “show” API.
 // @Tags Snapshots
 // @Produce  json
-// @Success 200 {array} deb.Snapshot
+// @Success 200 {array} snapshotResponse
 // @Router /api/snapshots [get]
 func apiSnapshotsList(c *gin.Context) {
 	SortMethodString := c.Request.URL.Query().Get("sort")
@@ -32,11 +32,20 @@ func apiSnapshotsList(c *gin.Context) {
 		SortMethodString = "name"
 	}
 
-	result := []*deb.Snapshot{}
-	_ = collection.ForEachSorted(SortMethodString, func(snapshot *deb.Snapshot) error {
-		result = append(result, snapshot)
+	result := []snapshotResponse{}
+	err := collection.ForEachSorted(SortMethodString, func(snapshot *deb.Snapshot) error {
+		err := collection.LoadComplete(snapshot)
+		if err != nil {
+			return err
+		}
+
+		result = append(result, newSnapshotResponse(snapshot))
 		return nil
 	})
+	if err != nil {
+		AbortWithJSONError(c, 500, err)
+		return
+	}
 
 	c.JSON(200, result)
 }

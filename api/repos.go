@@ -69,17 +69,26 @@ func reposServeInAPIMode(c *gin.Context) {
 // @Description Each repo is returned as in “show” API.
 // @Tags Repos
 // @Produce  json
-// @Success 200 {array} deb.LocalRepo
+// @Success 200 {array} localRepoResponse
 // @Router /api/repos [get]
 func apiReposList(c *gin.Context) {
-	result := []*deb.LocalRepo{}
+	result := []localRepoResponse{}
 
 	collectionFactory := context.NewCollectionFactory()
 	collection := collectionFactory.LocalRepoCollection()
-	_ = collection.ForEach(func(r *deb.LocalRepo) error {
-		result = append(result, r)
+	err := collection.ForEach(func(r *deb.LocalRepo) error {
+		err := collection.LoadComplete(r)
+		if err != nil {
+			return err
+		}
+
+		result = append(result, newLocalRepoResponse(r))
 		return nil
 	})
+	if err != nil {
+		AbortWithJSONError(c, 500, err)
+		return
+	}
 
 	c.JSON(200, result)
 }
