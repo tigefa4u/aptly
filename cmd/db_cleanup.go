@@ -26,6 +26,7 @@ func aptlyDBCleanup(cmd *commander.Command, args []string) error {
 
 	// collect information about references packages...
 	existingPackageRefs := deb.NewPackageRefList()
+	referencedAppStreamFiles := []string{}
 
 	// used only in verbose mode to report package use source
 	packageRefSources := map[string][]string{}
@@ -53,6 +54,10 @@ func aptlyDBCleanup(cmd *commander.Command, args []string) error {
 					return nil
 				})
 			}
+		}
+
+		for _, poolPath := range repo.AppStreamFiles {
+			referencedAppStreamFiles = append(referencedAppStreamFiles, poolPath)
 		}
 
 		return nil
@@ -118,6 +123,11 @@ func aptlyDBCleanup(cmd *commander.Command, args []string) error {
 				return nil
 			})
 		}
+
+		for _, poolPath := range snapshot.AppStreamFiles {
+			referencedAppStreamFiles = append(referencedAppStreamFiles, poolPath)
+		}
+
 		return nil
 	})
 	if err != nil {
@@ -236,6 +246,7 @@ func aptlyDBCleanup(cmd *commander.Command, args []string) error {
 		return err
 	}
 
+	referencedFiles = append(referencedFiles, referencedAppStreamFiles...)
 	sort.Strings(referencedFiles)
 	context.Progress().ShutdownBar()
 

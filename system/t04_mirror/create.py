@@ -533,3 +533,14 @@ class CreateMirror37Test(BaseTest):
         self.check_output()
         self.check_cmd_output("aptly mirror show mirror37",
                               "mirror_show", match_prepare=removeDates)
+
+
+class CreateMirror38Test(BaseTest):
+    """
+    create mirror: mirror with appstream enabled
+    """
+    runCmd = "aptly -architectures=amd64 mirror create -ignore-signatures -with-appstream mirror38 http://repo.aptly.info/system-tests/archive.debian.org/debian-archive/debian/ stretch"
+
+    def check(self):
+        self.check_output()
+        self.check_cmd_output("aptly mirror show mirror38", "mirror_show")

@@ -40,6 +40,9 @@ type Snapshot struct {
 	NotAutomatic         string
 	ButAutomaticUpgrades string
 
+	// AppStream files: relative path → pool path (pass-through from mirror)
+	AppStreamFiles map[string]string `json:",omitempty"`
+
 	packageRefs *PackageRefList
 }
 
@@ -59,6 +62,7 @@ func NewSnapshotFromRepository(name string, repo *RemoteRepo) (*Snapshot, error)
 		Origin:               repo.Meta["Origin"],
 		NotAutomatic:         repo.Meta["NotAutomatic"],
 		ButAutomaticUpgrades: repo.Meta["ButAutomaticUpgrades"],
+		AppStreamFiles:       repo.AppStreamFiles,
 		packageRefs:          repo.packageRefs,
 	}, nil
 }
@@ -94,14 +98,28 @@ func NewSnapshotFromRefList(name string, sources []*Snapshot, list *PackageRefLi
 		sourceUUIDs[i] = sources[i].UUID
 	}
 
+	// Merge AppStreamFiles from all source snapshots
+	var mergedAppStream map[string]string
+	for _, source := range sources {
+		if len(source.AppStreamFiles) > 0 {
+			if mergedAppStream == nil {
+				mergedAppStream = make(map[string]string)
+			}
+			for k, v := range source.AppStreamFiles {
+				mergedAppStream[k] = v
+			}
+		}
+	}
+
 	return &Snapshot{
-		UUID:        uuid.NewString(),
-		Name:        name,
-		CreatedAt:   time.Now(),
-		SourceKind:  "snapshot",
-		SourceIDs:   sourceUUIDs,
-		Description: description,
-		packageRefs: list,
+		UUID:           uuid.NewString(),
+		Name:           name,
+		CreatedAt:      time.Now(),
+		SourceKind:     "snapshot",
+		SourceIDs:      sourceUUIDs,
+		Description:    description,
+		AppStreamFiles: mergedAppStream,
+		packageRefs:    list,
 	}
 }
 

@@ -1,0 +1,14 @@
+Loading packages...
+Generating metadata files and linking package files...
+[!] Failed to generate package contents:  unable to read .deb archive from amanda-client_3.3.1-3~bpo60+1_amd64.deb: ar: missing global header
+Finalizing metadata files...
+Signing file 'Release' with gpg, please enter your passphrase when prompted:
+Clearsigning file 'Release' with gpg, please enter your passphrase when prompted:
+
+Snapshot snap-appstream has been successfully published.
+Please setup your webserver to serve directory '${HOME}/.aptly/public' with autoindexing.
+Now you can add following line to apt sources:
+  deb http://your-server/ hardy main
+Don't forget to add your GPG key to apt with apt-key.
+
+You can also use `aptly serve` to publish your repositories over HTTP quickly.

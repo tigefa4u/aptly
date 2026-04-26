@@ -1,0 +1,4 @@
+Downloading: http://repo.aptly.info/system-tests/archive.debian.org/debian-archive/debian/dists/stretch/Release
+
+Mirror [mirror38]: http://repo.aptly.info/system-tests/archive.debian.org/debian-archive/debian/ stretch [appstream] successfully added.
+You can run 'aptly mirror update mirror38' to download repository contents.

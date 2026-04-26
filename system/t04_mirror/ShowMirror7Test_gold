@@ -31,6 +31,7 @@
   "DownloadSources": false,
   "DownloadUdebs": false,
   "DownloadInstaller": false,
+  "DownloadAppStream": false,
   "Packages": [
     "alien-arena-server_7.53+dfsg-3_amd64",
     "alien-arena-server_7.53+dfsg-3_i386",

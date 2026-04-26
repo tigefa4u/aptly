@@ -2,6 +2,7 @@ package deb
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -90,8 +91,8 @@ type RemoteRepoSuite struct {
 var _ = Suite(&RemoteRepoSuite{})
 
 func (s *RemoteRepoSuite) SetUpTest(c *C) {
-	s.repo, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian", "squeeze", []string{"main"}, []string{}, false, false, false)
-	s.flat, _ = NewRemoteRepo("exp42", "http://repos.express42.com/virool/precise/", "./", []string{}, []string{}, false, false, false)
+	s.repo, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian", "squeeze", []string{"main"}, []string{}, false, false, false, false)
+	s.flat, _ = NewRemoteRepo("exp42", "http://repos.express42.com/virool/precise/", "./", []string{}, []string{}, false, false, false, false)
 	s.downloader = http.NewFakeDownloader().ExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/Release", exampleReleaseFile)
 	s.progress = console.NewProgress(false)
 	s.db, _ = goleveldb.NewOpenDB(c.MkDir())
@@ -108,7 +109,7 @@ func (s *RemoteRepoSuite) TearDownTest(c *C) {
 }
 
 func (s *RemoteRepoSuite) TestInvalidURL(c *C) {
-	_, err := NewRemoteRepo("s", "http://lolo%2", "squeeze", []string{"main"}, []string{}, false, false, false)
+	_, err := NewRemoteRepo("s", "http://lolo%2", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(err, ErrorMatches, ".*(hexadecimal escape in host|percent-encoded characters in host|invalid URL escape).*")
 }
 
@@ -117,12 +118,15 @@ func (s *RemoteRepoSuite) TestFlatCreation(c *C) {
 	c.Check(s.flat.Distribution, Equals, "./")
 	c.Check(s.flat.Components, IsNil)
 
-	flat2, _ := NewRemoteRepo("flat2", "http://pkg.jenkins-ci.org/debian-stable", "binary/", []string{}, []string{}, false, false, false)
+	flat2, _ := NewRemoteRepo("flat2", "http://pkg.jenkins-ci.org/debian-stable", "binary/", []string{}, []string{}, false, false, false, false)
 	c.Check(flat2.IsFlat(), Equals, true)
 	c.Check(flat2.Distribution, Equals, "./binary/")
 
-	_, err := NewRemoteRepo("fl", "http://some.repo/", "./", []string{"main"}, []string{}, false, false, false)
+	_, err := NewRemoteRepo("fl", "http://some.repo/", "./", []string{"main"}, []string{}, false, false, false, false)
 	c.Check(err, ErrorMatches, "components aren't supported for flat repos")
+
+	_, err = NewRemoteRepo("fl", "http://some.repo/", "./", []string{}, []string{}, false, false, false, true)
+	c.Check(err, ErrorMatches, "AppStream \\(DEP-11\\) metadata isn't supported for flat repos")
 }
 
 func (s *RemoteRepoSuite) TestString(c *C) {
@@ -135,6 +139,43 @@ func (s *RemoteRepoSuite) TestString(c *C) {
 	s.flat.DownloadSources = true
 	c.Check(s.repo.String(), Equals, "[yandex]: http://mirror.yandex.ru/debian/ squeeze [src] [udeb] [installer]")
 	c.Check(s.flat.String(), Equals, "[exp42]: http://repos.express42.com/virool/precise/ ./ [src]")
+
+	s.repo.DownloadAppStream = true
+	c.Check(s.repo.String(), Equals, "[yandex]: http://mirror.yandex.ru/debian/ squeeze [src] [udeb] [installer] [appstream]")
+
+	// AppStream is not supported for flat repos, so no flat test here
+}
+
+func (s *RemoteRepoSuite) TestAppStreamPaths(c *C) {
+	s.repo.ReleaseFiles = nil
+	c.Check(s.repo.AppStreamPaths("main"), DeepEquals, []string(nil))
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/binary-amd64/Packages":              {Size: 100},
+		"main/dep11/Components-amd64.yml.gz":       {Size: 200},
+		"main/dep11/Components-i386.yml.gz":         {Size: 300},
+		"main/dep11/icons-48x48.tar.gz":             {Size: 400},
+		"contrib/dep11/Components-amd64.yml.gz":     {Size: 500},
+		"main/source/Sources":                       {Size: 600},
+	}
+
+	paths := s.repo.AppStreamPaths("main")
+	c.Check(paths, DeepEquals, []string{
+		"main/dep11/Components-amd64.yml.gz",
+		"main/dep11/Components-i386.yml.gz",
+		"main/dep11/icons-48x48.tar.gz",
+	})
+
+	paths = s.repo.AppStreamPaths("contrib")
+	c.Check(paths, DeepEquals, []string{
+		"contrib/dep11/Components-amd64.yml.gz",
+	})
+
+	paths = s.repo.AppStreamPaths("non-free")
+	c.Check(paths, DeepEquals, []string(nil))
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{}
+	c.Check(s.repo.AppStreamPaths("main"), DeepEquals, []string(nil))
 }
 
 func (s *RemoteRepoSuite) TestNumPackages(c *C) {
@@ -236,13 +277,13 @@ func (s *RemoteRepoSuite) TestFetchNullVerifier2(c *C) {
 }
 
 func (s *RemoteRepoSuite) TestFetchWrongArchitecture(c *C) {
-	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{"xyz"}, false, false, false)
+	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{"xyz"}, false, false, false, false)
 	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, ErrorMatches, "architecture xyz not available in repo.*")
 }
 
 func (s *RemoteRepoSuite) TestFetchWrongComponent(c *C) {
-	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"xyz"}, []string{"i386"}, false, false, false)
+	s.repo, _ = NewRemoteRepo("s", "http://mirror.yandex.ru/debian/", "squeeze", []string{"xyz"}, []string{"i386"}, false, false, false, false)
 	err := s.repo.Fetch(s.downloader, nil, true)
 	c.Assert(err, ErrorMatches, "component xyz not available in repo.*")
 }
@@ -684,6 +725,74 @@ func (s *RemoteRepoSuite) TestDownloadWithSourcesFlat(c *C) {
 	c.Assert(s.flat.packageRefs, NotNil)
 }
 
+func (s *RemoteRepoSuite) TestDownloadAppStreamFiles(c *C) {
+	// No dep11 entries
+	s.repo.Components = []string{"main"}
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/binary-amd64/Packages": {Size: 100},
+		"main/source/Sources":        {Size: 200},
+	}
+
+	err := s.repo.DownloadAppStreamFiles(s.progress, s.downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 0)
+
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 16},
+		"main/dep11/icons-48x48.tar.gz":      {Size: 16},
+		"main/binary-amd64/Packages":          {Size: 100},
+	}
+
+	downloader := http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz", "dep11-icons-data")
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 2)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
+	c.Check(s.repo.AppStreamFiles["main/dep11/icons-48x48.tar.gz"], Not(Equals), "")
+
+	// 404 skipped
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 16},
+		"main/dep11/icons-48x48.tar.gz":      {Size: 15},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+	downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz", &http.Error{Code: 404, URL: "http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/icons-48x48.tar.gz"})
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 1)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
+
+	// Generic download error propagated
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 18},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.ExpectError("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", fmt.Errorf("connection refused"))
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, false)
+	c.Assert(err, ErrorMatches, "unable to download AppStream file.*connection refused")
+
+	// Bypass checksum validation
+	s.repo.ReleaseFiles = map[string]utils.ChecksumInfo{
+		"main/dep11/Components-amd64.yml.gz": {Size: 999, MD5: "bad", SHA256: "bad"},
+	}
+
+	downloader = http.NewFakeDownloader()
+	downloader.AnyExpectResponse("http://mirror.yandex.ru/debian/dists/squeeze/main/dep11/Components-amd64.yml.gz", "dep11-components")
+
+	err = s.repo.DownloadAppStreamFiles(s.progress, downloader, s.packagePool, s.cs, true)
+	c.Assert(err, IsNil)
+	c.Check(s.repo.AppStreamFiles, HasLen, 1)
+	c.Check(s.repo.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Not(Equals), "")
+}
+
 type RemoteRepoCollectionSuite struct {
 	PackageListMixinSuite
 	db         database.Storage
@@ -706,7 +815,7 @@ func (s *RemoteRepoCollectionSuite) TestAddByName(c *C) {
 	_, err := s.collection.ByName("yandex")
 	c.Assert(err, ErrorMatches, "*.not found")
 
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(s.collection.Add(repo), IsNil)
 	c.Assert(s.collection.Add(repo), ErrorMatches, ".*already exists")
 
@@ -724,7 +833,7 @@ func (s *RemoteRepoCollectionSuite) TestByUUID(c *C) {
 	_, err := s.collection.ByUUID("some-uuid")
 	c.Assert(err, ErrorMatches, "*.not found")
 
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(s.collection.Add(repo), IsNil)
 
 	r, err := s.collection.ByUUID(repo.UUID)
@@ -738,7 +847,7 @@ func (s *RemoteRepoCollectionSuite) TestByUUID(c *C) {
 }
 
 func (s *RemoteRepoCollectionSuite) TestUpdateLoadComplete(c *C) {
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(s.collection.Update(repo), IsNil)
 
 	collection := NewRemoteRepoCollection(s.db)
@@ -759,7 +868,7 @@ func (s *RemoteRepoCollectionSuite) TestUpdateLoadComplete(c *C) {
 }
 
 func (s *RemoteRepoCollectionSuite) TestForEachAndLen(c *C) {
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	_ = s.collection.Add(repo)
 
 	count := 0
@@ -781,10 +890,10 @@ func (s *RemoteRepoCollectionSuite) TestForEachAndLen(c *C) {
 }
 
 func (s *RemoteRepoCollectionSuite) TestDrop(c *C) {
-	repo1, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo1, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	_ = s.collection.Add(repo1)
 
-	repo2, _ := NewRemoteRepo("tyndex", "http://mirror.yandex.ru/debian/", "wheezy", []string{"main"}, []string{}, false, false, false)
+	repo2, _ := NewRemoteRepo("tyndex", "http://mirror.yandex.ru/debian/", "wheezy", []string{"main"}, []string{}, false, false, false, false)
 	_ = s.collection.Add(repo2)
 
 	r1, _ := s.collection.ByUUID(repo1.UUID)

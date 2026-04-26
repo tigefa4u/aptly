@@ -70,6 +70,10 @@ type RemoteRepo struct {
 	DownloadUdebs bool
 	// Should we download installer files?
 	DownloadInstaller bool
+	// Should we download AppStream (DEP-11) metadata?
+	DownloadAppStream bool
+	// AppStream files: relative path (e.g. "main/dep11/Components-amd64.yml.gz") → pool path
+	AppStreamFiles map[string]string `codec:"AppStreamFiles" json:"-"`
 	// Packages for json output
 	Packages []string `codec:"-" json:",omitempty"`
 	// "Snapshot" of current list of packages
@@ -82,7 +86,7 @@ type RemoteRepo struct {
 
 // NewRemoteRepo creates new instance of Debian remote repository with specified params
 func NewRemoteRepo(name string, archiveRoot string, distribution string, components []string,
-	architectures []string, downloadSources bool, downloadUdebs bool, downloadInstaller bool) (*RemoteRepo, error) {
+	architectures []string, downloadSources bool, downloadUdebs bool, downloadInstaller bool, downloadAppStream bool) (*RemoteRepo, error) {
 	result := &RemoteRepo{
 		UUID:              uuid.NewString(),
 		Name:              name,
@@ -93,6 +97,7 @@ func NewRemoteRepo(name string, archiveRoot string, distribution string, compone
 		DownloadSources:   downloadSources,
 		DownloadUdebs:     downloadUdebs,
 		DownloadInstaller: downloadInstaller,
+		DownloadAppStream: downloadAppStream,
 	}
 
 	err := result.prepare()
@@ -110,6 +115,9 @@ func NewRemoteRepo(name string, archiveRoot string, distribution string, compone
 		}
 		if result.DownloadUdebs {
 			return nil, fmt.Errorf("debian-installer udebs aren't supported for flat repos")
+		}
+		if result.DownloadAppStream {
+			return nil, fmt.Errorf("AppStream (DEP-11) metadata isn't supported for flat repos")
 		}
 		result.Components = nil
 	}
@@ -146,6 +154,9 @@ func (repo *RemoteRepo) String() string {
 	}
 	if repo.DownloadInstaller {
 		srcFlag += " [installer]"
+	}
+	if repo.DownloadAppStream {
+		srcFlag += " [appstream]"
 	}
 	distribution := repo.Distribution
 	if distribution == "" {
@@ -262,6 +273,82 @@ func (repo *RemoteRepo) InstallerPath(component string, architecture string) str
 		return fmt.Sprintf("%s/installer-%s/current/legacy-images/SHA256SUMS", component, architecture)
 	}
 	return fmt.Sprintf("%s/installer-%s/current/images/SHA256SUMS", component, architecture)
+}
+
+// AppStreamPaths returns dep11 file paths from ReleaseFiles for a given component
+func (repo *RemoteRepo) AppStreamPaths(component string) []string {
+	prefix := component + "/dep11/"
+	var paths []string
+	for path := range repo.ReleaseFiles {
+		if strings.HasPrefix(path, prefix) {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+// DownloadAppStreamFiles downloads AppStream (DEP-11) metadata files and imports them into the pool
+func (repo *RemoteRepo) DownloadAppStreamFiles(progress aptly.Progress, d aptly.Downloader,
+	packagePool aptly.PackagePool, checksumStorage aptly.ChecksumStorage, ignoreChecksums bool) error {
+
+	repo.AppStreamFiles = make(map[string]string)
+
+	for _, component := range repo.Components {
+		paths := repo.AppStreamPaths(component)
+		if len(paths) == 0 {
+			continue
+		}
+
+		for _, relativePath := range paths {
+			info, ok := repo.ReleaseFiles[relativePath]
+			if !ok {
+				continue
+			}
+
+			url := repo.IndexesRootURL().ResolveReference(&url.URL{Path: relativePath}).String()
+
+			if progress != nil {
+				progress.Printf("Downloading AppStream file %s...\n", relativePath)
+			}
+
+			tempDir, err := os.MkdirTemp("", "aptly-appstream-*")
+			if err != nil {
+				return fmt.Errorf("unable to create temp dir for AppStream file %s: %s", relativePath, err)
+			}
+
+			tempPath := path.Join(tempDir, path.Base(relativePath))
+
+			var expected *utils.ChecksumInfo
+			if !ignoreChecksums {
+				expected = &info
+			}
+
+			err = d.DownloadWithChecksum(gocontext.TODO(), url, tempPath, expected, ignoreChecksums)
+			if err != nil {
+				_ = os.RemoveAll(tempDir)
+				// Skip files that are not found (some repos list dep11 files but don't serve them)
+				if herr, ok := err.(*http.Error); ok && (herr.Code == 404 || herr.Code == 403) {
+					if progress != nil {
+						progress.ColoredPrintf("@y[!]@| @!skipping AppStream file %s: not found@|", relativePath)
+					}
+					continue
+				}
+				return fmt.Errorf("unable to download AppStream file %s: %s", relativePath, err)
+			}
+
+			basename := path.Base(relativePath)
+			poolPath, err := packagePool.Import(tempPath, basename, &info, true, checksumStorage)
+			_ = os.RemoveAll(tempDir)
+			if err != nil {
+				return fmt.Errorf("unable to import AppStream file %s: %s", relativePath, err)
+			}
+
+			repo.AppStreamFiles[relativePath] = poolPath
+		}
+	}
+
+	return nil
 }
 
 // PackageURL returns URL of package file relative to repository root

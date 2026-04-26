@@ -5,6 +5,7 @@ Components: main, contrib, non-free
 Architectures: amd64, arm64, armel, armhf, i386, mips, mips64el, mipsel, ppc64el, s390x
 Download Sources: no
 Download .udebs: no
+Download AppStream: no
 Last update: never
 
 Information from release file:

@@ -35,6 +35,8 @@ func aptlyMirrorEdit(cmd *commander.Command, args []string) error {
 			repo.Filter = flag.Value.String() // allows file/stdin with @
 		case "filter-with-deps":
 			repo.FilterWithDeps = flag.Value.Get().(bool)
+		case "with-appstream":
+			repo.DownloadAppStream = flag.Value.Get().(bool)
 		case "with-installer":
 			repo.DownloadInstaller = flag.Value.Get().(bool)
 		case "with-sources":
@@ -51,6 +53,10 @@ func aptlyMirrorEdit(cmd *commander.Command, args []string) error {
 
 	if repo.IsFlat() && repo.DownloadUdebs {
 		return fmt.Errorf("unable to edit: flat mirrors don't support udebs")
+	}
+
+	if repo.IsFlat() && repo.DownloadAppStream {
+		return fmt.Errorf("unable to edit: flat mirrors don't support AppStream (DEP-11) metadata")
 	}
 
 	if repo.Filter != "" {
@@ -107,6 +113,7 @@ Example:
 	AddStringOrFileFlag(&cmd.Flag, "filter", "", "filter packages in mirror, use '@file' to read filter from file or '@-' for stdin")
 	cmd.Flag.Bool("filter-with-deps", false, "when filtering, include dependencies of matching packages as well")
 	cmd.Flag.Bool("ignore-signatures", false, "disable verification of Release file signatures")
+	cmd.Flag.Bool("with-appstream", false, "download AppStream (DEP-11) metadata")
 	cmd.Flag.Bool("with-installer", false, "download additional not packaged installer files")
 	cmd.Flag.Bool("with-sources", false, "download source packages in addition to binary packages")
 	cmd.Flag.Bool("with-udebs", false, "download .udeb packages (Debian installer support)")

@@ -13,6 +13,7 @@ import (
 	"github.com/aptly-dev/aptly/database"
 	"github.com/aptly-dev/aptly/database/goleveldb"
 	"github.com/aptly-dev/aptly/files"
+	"github.com/aptly-dev/aptly/utils"
 	"github.com/ugorji/go/codec"
 
 	. "gopkg.in/check.v1"
@@ -115,7 +116,7 @@ func (s *PublishedRepoSuite) SetUpTest(c *C) {
 
 	s.reflist = NewPackageRefListFromPackageList(s.list)
 
-	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	repo, _ := NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	repo.packageRefs = s.reflist
 	_ = s.factory.RemoteRepoCollection().Add(repo)
 
@@ -423,6 +424,81 @@ func (s *PublishedRepoSuite) TestPublish(c *C) {
 
 	_, err = os.Stat(filepath.Join(s.publishedStorage.PublicPath(), "ppa/pool/main/a/alien-arena/alien-arena-common_7.40-2_i386.deb"))
 	c.Assert(err, IsNil)
+}
+
+func (s *PublishedRepoSuite) TestPublishAppStream(c *C) {
+	// Components + icons
+	content1 := []byte("DEP-11 test content for Components-amd64.yml.gz")
+	tmpFile1 := filepath.Join(c.MkDir(), "Components-amd64.yml.gz")
+	c.Assert(os.WriteFile(tmpFile1, content1, 0644), IsNil)
+
+	checksums1 := utils.ChecksumInfo{Size: int64(len(content1))}
+	poolPath1, err := s.packagePool.Import(tmpFile1, "Components-amd64.yml.gz", &checksums1, false, s.cs)
+	c.Assert(err, IsNil)
+
+	content2 := []byte("DEP-11 icons tar data")
+	tmpFile2 := filepath.Join(c.MkDir(), "icons-48x48.tar.gz")
+	c.Assert(os.WriteFile(tmpFile2, content2, 0644), IsNil)
+
+	checksums2 := utils.ChecksumInfo{Size: int64(len(content2))}
+	poolPath2, err := s.packagePool.Import(tmpFile2, "icons-48x48.tar.gz", &checksums2, false, s.cs)
+	c.Assert(err, IsNil)
+
+	// Include contrib file that should be skipped
+	contribContent := []byte("DEP-11 contrib content")
+	tmpFile3 := filepath.Join(c.MkDir(), "Components-contrib.yml.gz")
+	c.Assert(os.WriteFile(tmpFile3, contribContent, 0644), IsNil)
+
+	checksums3 := utils.ChecksumInfo{Size: int64(len(contribContent))}
+	poolPath3, err := s.packagePool.Import(tmpFile3, "Components-contrib.yml.gz", &checksums3, false, s.cs)
+	c.Assert(err, IsNil)
+
+	s.snapshot.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz":    poolPath1,
+		"main/dep11/icons-48x48.tar.gz":         poolPath2,
+		"contrib/dep11/Components-amd64.yml.gz": poolPath3,
+	}
+
+	err = s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
+	c.Assert(err, IsNil)
+
+	// Both main files should exist
+	appstreamPath1 := filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/main/dep11/Components-amd64.yml.gz")
+	c.Check(appstreamPath1, PathExists)
+	actual1, err := os.ReadFile(appstreamPath1)
+	c.Assert(err, IsNil)
+	c.Check(actual1, DeepEquals, content1)
+
+	appstreamPath2 := filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/main/dep11/icons-48x48.tar.gz")
+	c.Check(appstreamPath2, PathExists)
+	actual2, err := os.ReadFile(appstreamPath2)
+	c.Assert(err, IsNil)
+	c.Check(actual2, DeepEquals, content2)
+
+	// Contrib file should not appear
+	contribPath := filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/contrib/dep11/Components-amd64.yml.gz")
+	_, statErr := os.Stat(contribPath)
+	c.Check(os.IsNotExist(statErr), Equals, true)
+
+	// Release file should reference AppStream files
+	rf, err := os.Open(filepath.Join(s.publishedStorage.PublicPath(), "ppa/dists/squeeze/Release"))
+	c.Assert(err, IsNil)
+	defer rf.Close()
+
+	cfr := NewControlFileReader(rf, true, false)
+	st, err := cfr.ReadStanza()
+	c.Assert(err, IsNil)
+
+	c.Check(st["MD5Sum"], Matches, "(?s).*main/dep11/Components-amd64\\.yml\\.gz.*")
+	c.Check(st["SHA256"], Matches, "(?s).*main/dep11/Components-amd64\\.yml\\.gz.*")
+
+	// Pool open error
+	s.snapshot.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz": "nonexistent/pool/path",
+	}
+
+	err = s.repo.Publish(s.packagePool, s.provider, s.factory, &NullSigner{}, nil, false, "")
+	c.Assert(err, ErrorMatches, "unable to open AppStream file from pool.*")
 }
 
 func (s *PublishedRepoSuite) TestPublishNoSigner(c *C) {

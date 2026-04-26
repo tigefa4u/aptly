@@ -19,7 +19,7 @@ var _ = Suite(&SnapshotSuite{})
 
 func (s *SnapshotSuite) SetUpTest(c *C) {
 	s.SetUpPackages()
-	s.repo, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	s.repo, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	s.repo.packageRefs = s.reflist
 }
 
@@ -101,6 +101,62 @@ func (s *SnapshotSuite) TestEncodeDecode(c *C) {
 	c.Assert(snapshot2.packageRefs, IsNil)
 }
 
+func (s *SnapshotSuite) TestSnapshotFromRepositoryAppStream(c *C) {
+	s.repo.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz": "ab/cd/Components-amd64.yml.gz",
+		"main/dep11/icons-48x48.tar.gz":      "ef/gh/icons-48x48.tar.gz",
+	}
+	snapshot, err := NewSnapshotFromRepository("snap-as", s.repo)
+	c.Assert(err, IsNil)
+	c.Check(snapshot.AppStreamFiles, DeepEquals, s.repo.AppStreamFiles)
+
+	s.repo.AppStreamFiles = nil
+	snapshot2, err := NewSnapshotFromRepository("snap-no-as", s.repo)
+	c.Assert(err, IsNil)
+	c.Check(snapshot2.AppStreamFiles, IsNil)
+}
+
+func (s *SnapshotSuite) TestSnapshotFromRefListAppStreamMerge(c *C) {
+	snap1, _ := NewSnapshotFromRepository("snap1", s.repo)
+	snap1.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz": "aa/bb/Components-amd64.yml.gz",
+		"main/dep11/icons-48x48.tar.gz":      "cc/dd/icons-48x48.tar.gz",
+	}
+
+	snap2, _ := NewSnapshotFromRepository("snap2", s.repo)
+	snap2.AppStreamFiles = map[string]string{
+		"contrib/dep11/Components-amd64.yml.gz": "ee/ff/Components-amd64.yml.gz",
+		"main/dep11/Components-amd64.yml.gz":     "xx/yy/Components-amd64.yml.gz",
+	}
+
+	merged := NewSnapshotFromRefList("merged", []*Snapshot{snap1, snap2}, s.reflist, "Merged")
+
+	c.Check(len(merged.AppStreamFiles), Equals, 3)
+	c.Check(merged.AppStreamFiles["main/dep11/icons-48x48.tar.gz"], Equals, "cc/dd/icons-48x48.tar.gz")
+	c.Check(merged.AppStreamFiles["contrib/dep11/Components-amd64.yml.gz"], Equals, "ee/ff/Components-amd64.yml.gz")
+	c.Check(merged.AppStreamFiles["main/dep11/Components-amd64.yml.gz"], Equals, "xx/yy/Components-amd64.yml.gz")
+
+	snap3, _ := NewSnapshotFromRepository("snap3", s.repo)
+	snap3.AppStreamFiles = nil
+	snap4, _ := NewSnapshotFromRepository("snap4", s.repo)
+	snap4.AppStreamFiles = nil
+	merged2 := NewSnapshotFromRefList("merged2", []*Snapshot{snap3, snap4}, s.reflist, "Merged2")
+	c.Check(merged2.AppStreamFiles, IsNil)
+}
+
+func (s *SnapshotSuite) TestEncodeDecodeAppStream(c *C) {
+	snapshot, _ := NewSnapshotFromRepository("snap-as-enc", s.repo)
+	snapshot.AppStreamFiles = map[string]string{
+		"main/dep11/Components-amd64.yml.gz": "ab/cd/Components-amd64.yml.gz",
+		"main/dep11/icons-48x48.tar.gz":      "ef/gh/icons-48x48.tar.gz",
+	}
+
+	decoded := &Snapshot{}
+	c.Assert(decoded.Decode(snapshot.Encode()), IsNil)
+	c.Check(decoded.Name, Equals, snapshot.Name)
+	c.Check(decoded.AppStreamFiles, DeepEquals, snapshot.AppStreamFiles)
+}
+
 type SnapshotCollectionSuite struct {
 	PackageListMixinSuite
 	db                   database.Storage
@@ -118,11 +174,11 @@ func (s *SnapshotCollectionSuite) SetUpTest(c *C) {
 	s.collection = NewSnapshotCollection(s.db)
 	s.SetUpPackages()
 
-	s.repo1, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false)
+	s.repo1, _ = NewRemoteRepo("yandex", "http://mirror.yandex.ru/debian/", "squeeze", []string{"main"}, []string{}, false, false, false, false)
 	s.repo1.packageRefs = s.reflist
 	s.snapshot1, _ = NewSnapshotFromRepository("snap1", s.repo1)
 
-	s.repo2, _ = NewRemoteRepo("android", "http://mirror.yandex.ru/debian/", "lenny", []string{"main"}, []string{}, false, false, false)
+	s.repo2, _ = NewRemoteRepo("android", "http://mirror.yandex.ru/debian/", "lenny", []string{"main"}, []string{}, false, false, false, false)
 	s.repo2.packageRefs = s.reflist
 	s.snapshot2, _ = NewSnapshotFromRepository("snap2", s.repo2)
 
@@ -223,7 +279,7 @@ func (s *SnapshotCollectionSuite) TestFindByRemoteRepoSource(c *C) {
 	c.Check(s.collection.ByRemoteRepoSource(s.repo1), DeepEquals, []*Snapshot{s.snapshot1})
 	c.Check(s.collection.ByRemoteRepoSource(s.repo2), DeepEquals, []*Snapshot{s.snapshot2})
 
-	repo3, _ := NewRemoteRepo("other", "http://mirror.yandex.ru/debian/", "lenny", []string{"main"}, []string{}, false, false, false)
+	repo3, _ := NewRemoteRepo("other", "http://mirror.yandex.ru/debian/", "lenny", []string{"main"}, []string{}, false, false, false, false)
 
 	c.Check(s.collection.ByRemoteRepoSource(repo3), DeepEquals, []*Snapshot(nil))
 }

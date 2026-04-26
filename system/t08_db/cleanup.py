@@ -150,3 +150,27 @@ class CleanupDB12Test(BaseTest):
         "aptly mirror drop gnuplot-maverick",
     ]
     runCmd = "aptly db cleanup -verbose -dry-run"
+
+
+class CleanupDB13Test(BaseTest):
+    """
+    cleanup db: appstream files survive cleanup
+    """
+    fixtureWebServer = "../t04_mirror/test_release2"
+    fixtureGpg = True
+    configOverride = {"downloadRetries": 0}
+    fixtureCmds = [
+        "aptly mirror create --ignore-signatures -with-appstream -architectures=amd64 appstream-test ${url} hardy main",
+        "aptly mirror update -ignore-checksums --ignore-signatures appstream-test",
+        "aptly snapshot create snap-appstream from mirror appstream-test",
+    ]
+    runCmd = "aptly db cleanup"
+
+    def check(self):
+        self.check_output()
+        # verify appstream files survive cleanup by publishing the snapshot
+        self.check_cmd_output(
+            "aptly publish snapshot -keyring=${files}/aptly.pub -secret-keyring=${files}/aptly.sec snap-appstream",
+            "publish", match_prepare=self.expand_environ)
+        self.check_exists('public/dists/hardy/main/dep11/Components-amd64.yml.gz')
+        self.check_exists('public/dists/hardy/main/dep11/icons-48x48.tar.gz')

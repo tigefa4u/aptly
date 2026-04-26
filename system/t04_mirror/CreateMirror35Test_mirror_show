@@ -5,6 +5,7 @@ Components:
 Architectures: amd64
 Download Sources: no
 Download .udebs: no
+Download AppStream: no
 Filter: cuda-12-6 (= 12.6.2-1)
 Filter With Deps: yes
 Last update: never

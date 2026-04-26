@@ -64,6 +64,15 @@ func aptlyMirrorUpdate(cmd *commander.Command, args []string) error {
 		return fmt.Errorf("unable to update: %s", err)
 	}
 
+	if repo.DownloadAppStream && !repo.IsFlat() {
+		context.Progress().Printf("Downloading AppStream metadata...\n")
+		err = repo.DownloadAppStreamFiles(context.Progress(), context.Downloader(),
+			context.PackagePool(), collectionFactory.ChecksumCollection(nil), ignoreChecksums)
+		if err != nil {
+			return fmt.Errorf("unable to update: %s", err)
+		}
+	}
+
 	if repo.Filter != "" {
 		context.Progress().Printf("Applying filter...\n")
 		var filterQuery deb.PackageQuery

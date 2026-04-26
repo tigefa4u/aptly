@@ -61,6 +61,11 @@ func aptlyMirrorShowTxt(_ *commander.Command, args []string) error {
 		downloadUdebs = Yes
 	}
 	fmt.Printf("Download .udebs: %s\n", downloadUdebs)
+	downloadAppStream := No
+	if repo.DownloadAppStream {
+		downloadAppStream = Yes
+	}
+	fmt.Printf("Download AppStream: %s\n", downloadAppStream)
 	if repo.Filter != "" {
 		fmt.Printf("Filter: %s\n", repo.Filter)
 		filterWithDeps := No
