@@ -61,7 +61,7 @@ func (s *MirrorSuite) TestCreateMirror(c *C) {
 func (s *MirrorSuite) TestGetMirrorsIncludesNumPackages(c *C) {
 	collection := s.context.NewCollectionFactory().RemoteRepoCollection()
 
-	repo, err := deb.NewRemoteRepo("count-mirror", "http://example.com/debian", "stable", []string{"main"}, []string{}, false, false, false)
+	repo, err := deb.NewRemoteRepo("count-mirror", "http://example.com/debian", "stable", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(err, IsNil)
 
 	err = collection.Add(repo)
@@ -93,7 +93,7 @@ func (s *MirrorSuite) TestGetMirrorsIncludesNumPackages(c *C) {
 func (s *MirrorSuite) TestGetMirrorsReturns500OnCorruptRefList(c *C) {
 	collection := s.context.NewCollectionFactory().RemoteRepoCollection()
 
-	repo, err := deb.NewRemoteRepo("broken-mirror", "http://example.com/debian", "stable", []string{"main"}, []string{}, false, false, false)
+	repo, err := deb.NewRemoteRepo("broken-mirror", "http://example.com/debian", "stable", []string{"main"}, []string{}, false, false, false, false)
 	c.Assert(err, IsNil)
 	c.Assert(collection.Add(repo), IsNil)
 	putRawDBValue(c, &s.APISuite, repo.RefKey(), []byte("not-msgpack"))
