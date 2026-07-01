@@ -2,7 +2,7 @@ FROM debian:trixie-slim
 
 RUN echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sources.list.d/backports.list && \
     apt-get update -y && apt-get install -y --no-install-recommends curl gnupg bzip2 xz-utils ca-certificates vim procps \
-        golang-1.25 golang-1.25-go golang-1.25-src \
+        golang-1.26 golang-1.26-go golang-1.26-src \
         make git python3 python3-requests-unixsocket python3-termcolor python3-swiftclient python3-boto3 python3-azure-storage \
         g++ python3-etcd3 python3-plyvel graphviz devscripts sudo dh-golang binutils-i686-linux-gnu binutils-aarch64-linux-gnu \
         binutils-arm-linux-gnueabihf bash-completion zip ruby-dev lintian npm \
@@ -10,8 +10,8 @@ RUN echo 'deb http://deb.debian.org/debian trixie-backports main' > /etc/apt/sou
         gcc-i686-linux-gnu gcc-arm-linux-gnueabihf gcc-aarch64-linux-gnu \
         faketime dput-ng && \
     apt-get clean && rm -rf /var/lib/apt/lists/* && \
-    ln -sf /usr/lib/go-1.25/bin/go /usr/local/bin/go && \
-    ln -sf /usr/lib/go-1.25/bin/gofmt /usr/local/bin/gofmt
+    ln -sf /usr/lib/go-1.26/bin/go /usr/local/bin/go && \
+    ln -sf /usr/lib/go-1.26/bin/gofmt /usr/local/bin/gofmt
 
 RUN useradd -m --shell /bin/bash --home-dir /var/lib/aptly aptly
 RUN sed -i 's/#force_color_prompt=yes/force_color_prompt=yes/' /var/lib/aptly/.bashrc
